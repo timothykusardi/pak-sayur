@@ -12,7 +12,7 @@ const products = [
 
 export default function Home() {
   return (
-    <main className="mx-auto max-w-7xl px-4 md:px-6 py-4 md:py-6">
+    <main className="mx-auto max-w-7xl px-4 md:px-6 py-4 md:py-6 pb-24 md:pb-6">
       {/* NAVBAR */}
       <header className="sticky top-0 z-40 mb-5 rounded-2xl border border-gold/10 bg-deep/80 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 md:px-5">
@@ -23,7 +23,7 @@ export default function Home() {
             <span className="font-serif text-base md:text-lg leading-none">PAK SAYUR</span>
           </Link>
 
-          {/* Desktop nav only */}
+          {/* Desktop nav */}
           <nav className="hidden gap-8 md:flex">
             {[
               { href: "/", label: "Home" },
@@ -37,14 +37,31 @@ export default function Home() {
             ))}
           </nav>
 
-          {/* CTA always visible */}
           <Link href="/jadwal" className="btn">Jadwal Kunjungan</Link>
         </div>
+
+        {/* Mobile nav (scrollable pills) */}
+        <nav className="md:hidden flex gap-2 overflow-x-auto px-4 py-2 border-t border-gold/10">
+          {[
+            { href: "/", label: "Home" },
+            { href: "/menu", label: "Menu" },
+            { href: "/blog", label: "Blog" },
+            { href: "/kontak", label: "Kontak" },
+          ].map((l) => (
+            <Link
+              key={l.label}
+              href={l.href}
+              className="whitespace-nowrap rounded-full border border-gold/20 px-4 py-2 text-sm"
+            >
+              {l.label}
+            </Link>
+          ))}
+        </nav>
       </header>
 
       {/* HERO */}
       <section className="relative card-soft overflow-visible p-6 md:p-10">
-        {/* Bg image + overlay */}
+        {/* Background layers */}
         <div className="absolute inset-0 -z-10 overflow-hidden rounded-2xl">
           <Image
             src="/images/hero/leaf.jpg"
@@ -54,9 +71,9 @@ export default function Home() {
             sizes="(min-width:1024px) 1200px, 100vw"
             className="object-cover opacity-55"
           />
-          <div className="absolute inset-0 bg-[radial-gradient(60%_60%_at_60%_20%,rgba(81,133,102,.50)_0%,rgba(0,0,0,0)_60%)]" />
-          <div className="absolute inset-x-0 bottom-0 h-32 md:h-40 bg-gradient-to-t from-deep/70 to-transparent" />
         </div>
+        <div className="absolute inset-0 -z-10 rounded-2xl bg-[radial-gradient(60%_60%_at_60%_20%,rgba(81,133,102,.50)_0%,rgba(0,0,0,0)_60%)]" />
+        <div className="absolute inset-x-0 bottom-0 -z-10 h-32 md:h-40 rounded-b-2xl bg-gradient-to-t from-deep/70 to-transparent" />
 
         <div className="mx-auto max-w-2xl text-center">
           <h1 className="font-serif text-4xl leading-tight sm:text-5xl md:text-6xl">
@@ -79,7 +96,7 @@ export default function Home() {
             w-[340px] rounded-2xl border border-gold/20 bg-deep/95 p-6
           "
         >
-          <div className="translate-y-[-0.5rem]">
+          <div className="">
             <h3 className="font-serif text-[40px] leading-[1.05]">
               <span className="block">Pak Sayur</span>
               <span className="block"><span className="italic">Privé</span> Club</span>
@@ -102,7 +119,9 @@ export default function Home() {
       {/* MOBILE Privé (stacked) */}
       <section className="md:hidden mt-6">
         <div className="rounded-2xl border border-gold/20 bg-deep p-6">
-          <h3 className="font-serif text-3xl">Pak Sayur <span className="italic">Privé</span> Club</h3>
+          <h3 className="font-serif text-3xl">
+            Pak Sayur <span className="italic">Privé</span> Club
+          </h3>
           <ul className="mt-4 list-disc space-y-1 pl-5 text-goldmuted">
             <li>Akses panen lebih awal</li>
             <li>Gift wrap gratis</li>
