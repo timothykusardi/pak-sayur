@@ -17,17 +17,12 @@ const CATEGORIES: Record<CategoryId, { label: string }> = {
 };
 
 /* ------------------------------- PRODUCTS ------------------------------ */
-/* 
-  Image rules:
-  - Put PNG/WebP transparan di /public/images/products/<id>.png
-  - Yang belum punya foto akan pakai placeholder /images/placeholders/veg.png
-*/
 
 type Product = {
   id: string;
   name: string;
   category: CategoryId;
-  src?: string; // optional: if missing, we’ll use placeholder
+  src?: string; // optional: if missing, fallback image will be used
 };
 
 const P: Product[] = [
@@ -80,11 +75,11 @@ const P: Product[] = [
 /* --------------------------- SMALL CARD COMPONENT --------------------------- */
 
 function ProductCard({ name, src }: { name: string; src?: string }) {
-  const img = src ?? '/images/placeholders/veg.png'; // fallback
+  const img = src ?? '/images/placeholders/veg.png';
 
   return (
-    <div className="card p-4 group">
-      <div className="relative mb-4 aspect-[4/3] overflow-hidden rounded-xl border border-gold/15 bg-deep2">
+    <div className="card p-3 group">
+      <div className="relative mb-3 aspect-[4/3] overflow-hidden rounded-xl border border-gold/15 bg-deep2">
         <div className="pointer-events-none absolute inset-0 z-0 bg-[radial-gradient(60%_60%_at_50%_45%,rgba(0,0,0,.18)_0%,transparent_65%)]" />
         <Image
           src={img}
@@ -92,11 +87,11 @@ function ProductCard({ name, src }: { name: string; src?: string }) {
           fill
           sizes="(min-width:1024px) 220px, 40vw"
           className="relative z-10 object-contain p-3 drop-shadow-[0_10px_24px_rgba(0,0,0,.35)]
-                     transition-transform duration-500 ease-out transform-gpu group-hover:scale-115
+                     transition-transform duration-500 ease-out transform-gpu group-hover:scale-105
                      motion-reduce:transition-none motion-reduce:transform-none"
         />
       </div>
-      <div className="font-serif">{name}</div>
+      <div className="text-center font-serif text-sm sm:text-base">{name}</div>
     </div>
   );
 }
@@ -109,7 +104,7 @@ export default function MenuPage() {
 
   const filtered = useMemo(() => {
     const key = q.trim().toLowerCase();
-    return P.filter(p => {
+    return P.filter((p) => {
       const byCat = active === 'all' ? true : p.category === active;
       const byText = !key || p.name.toLowerCase().includes(key);
       return byCat && byText;
@@ -118,16 +113,16 @@ export default function MenuPage() {
 
   const countPerCat = useMemo(() => {
     const map = { all: P.length } as Record<string, number>;
-    (Object.keys(CATEGORIES) as CategoryId[]).forEach(c => {
-      map[c] = P.filter(p => p.category === c).length;
+    (Object.keys(CATEGORIES) as CategoryId[]).forEach((c) => {
+      map[c] = P.filter((p) => p.category === c).length;
     });
     return map;
   }, []);
 
   return (
-    <main className="mx-auto max-w-7xl px-6 py-6">
+    <main className="mx-auto max-w-7xl px-4 md:px-6 py-4 md:py-6">
       {/* HERO */}
-      <section className="relative card-soft overflow-hidden p-10 md:p-12">
+      <section className="relative card-soft overflow-hidden p-6 md:p-12">
         <div className="absolute inset-0 -z-10 overflow-hidden rounded-2xl">
           <Image
             src="/images/hero/leaf.jpg"
@@ -137,13 +132,15 @@ export default function MenuPage() {
             sizes="(min-width:1024px) 1200px, 100vw"
             className="object-cover opacity-60"
           />
-          <div className="absolute inset-0 bg-[radial-gradient(60%_60%_at_60%_20%,rgba(81,133,102,.55)_0%,rgba(0,0,0,0)_60%)]" />
-          <div className="absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-deep/70 to-transparent" />
         </div>
+        <div className="absolute inset-0 -z-10 bg-[radial-gradient(60%_60%_at_60%_20%,rgba(81,133,102,.55)_0%,rgba(0,0,0,0)_60%)]" />
+        <div className="absolute inset-x-0 bottom-0 -z-10 h-40 bg-gradient-to-t from-deep/70 to-transparent" />
 
         <div className="mx-auto max-w-3xl text-center">
-          <h1 className="font-serif text-5xl leading-tight md:text-6xl">Menu Lengkap</h1>
-          <p className="mt-3 text-lg text-goldmuted">Semua sayuran & bumbu untuk keluarga.</p>
+          <h1 className="font-serif text-4xl leading-tight md:text-6xl">Menu Lengkap</h1>
+          <p className="mt-3 text-base md:text-lg text-goldmuted">
+            Semua sayuran & bumbu untuk keluarga.
+          </p>
         </div>
       </section>
 
@@ -151,7 +148,7 @@ export default function MenuPage() {
       <div className="sticky top-16 z-30 mt-6 rounded-2xl border border-gold/10 bg-deep/80 p-3 backdrop-blur">
         <div className="flex flex-wrap items-center gap-3">
           {/* Search */}
-          <div className="flex-1 min-w-[240px]">
+          <div className="min-w-[240px] flex-1">
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
@@ -160,23 +157,23 @@ export default function MenuPage() {
             />
           </div>
 
-          {/* Chips */}
+          {/* Category chips */}
           <div className="flex flex-wrap gap-2">
             {([
               { id: 'all', label: `Semua (${countPerCat.all})` },
-              ...((Object.keys(CATEGORIES) as CategoryId[]).map(c => ({
+              ...(Object.keys(CATEGORIES) as CategoryId[]).map((c) => ({
                 id: c,
                 label: `${CATEGORIES[c].label} (${countPerCat[c]})`,
-              }))),
-            ] as { id: CategoryId | 'all'; label: string }[]).map(chip => (
+              })),
+            ] as { id: CategoryId | 'all'; label: string }[]).map((chip) => (
               <button
                 key={chip.id}
                 onClick={() => setActive(chip.id)}
-                className={`rounded-xl border px-3 py-1 text-sm transition
-                  ${active === chip.id
+                className={`rounded-xl border px-3 py-1 text-sm transition ${
+                  active === chip.id
                     ? 'border-gold/40 bg-gold/10'
                     : 'border-gold/15 hover:border-gold/25'
-                  }`}
+                }`}
               >
                 {chip.label}
               </button>
@@ -185,18 +182,20 @@ export default function MenuPage() {
         </div>
       </div>
 
-      {/* GROUPS by category */}
+      {/* GROUPS by category (2-col on mobile, 3/5 wider) */}
       <div className="mt-8 space-y-10">
-        {(Object.keys(CATEGORIES) as CategoryId[]).map(cat => {
-          const items = filtered.filter(p => p.category === cat);
+        {(Object.keys(CATEGORIES) as CategoryId[]).map((cat) => {
+          const items = filtered.filter((p) => p.category === cat);
           if (active !== 'all' && active !== cat) return null;
           if (items.length === 0) return null;
 
           return (
             <section key={cat} id={cat}>
-              <h2 className="font-serif text-3xl mb-4">{CATEGORIES[cat].label}</h2>
-              <div className="grid gap-6 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
-                {items.map(p => (
+              <h2 className="mb-4 font-serif text-3xl">{CATEGORIES[cat].label}</h2>
+
+              {/* ✅ 2-col mobile grid just like homepage */}
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
+                {items.map((p) => (
                   <ProductCard key={p.id} name={p.name} src={p.src} />
                 ))}
               </div>
