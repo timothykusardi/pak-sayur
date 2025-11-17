@@ -1,43 +1,22 @@
+// src/app/club/page.tsx
 'use client';
 
 import Image from 'next/image';
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 
-/* ============================= Types & Presets ============================= */
+/* ============================= Types & Data ============================= */
 
 type AreaId = 'all' | 'barat' | 'timur';
 
-type BlockGroup = {
-  label: string;   // e.g. "Blok A–B"
-  invite: string;  // WhatsApp invite URL
-};
-
-type EstateBase = {
-  id: string;
-  name: string;
-  area: Exclude<AreaId, 'all'>; // only 'barat' | 'timur'
-  blocks?: BlockGroup[];
-};
-
-// After normalization, every estate must have blocks
 type Estate = {
   id: string;
   name: string;
-  area: Exclude<AreaId, 'all'>;
-  blocks: BlockGroup[];
+  area: Exclude<AreaId, 'all'>; // only 'barat' | 'timur'
 };
 
-const DEFAULT_BLOCKS: BlockGroup[] = [
-  { label: 'Blok A–B', invite: '#' },
-  { label: 'Blok C–D', invite: '#' },
-  { label: 'Blok E–H', invite: '#' },
-];
-
-/* =========================== Surabaya – Estates =========================== */
-/* Replace invite: '#' with your actual WhatsApp invite URLs.                */
-
-const RAW_ESTATES: EstateBase[] = [
+// List perumahan — same as before, just no blocks:
+const ESTATES: Estate[] = [
   /* --- SURABAYA BARAT --- */
   { id: 'graha-family',        name: 'Graha Family',        area: 'barat' },
   { id: 'royal-residence',     name: 'Royal Residence',     area: 'barat' },
@@ -66,15 +45,22 @@ const RAW_ESTATES: EstateBase[] = [
   { id: 'laguna-residence',    name: 'Laguna Residence',    area: 'timur' },
 ];
 
-// Normalize so every estate has blocks
-const ESTATES: Estate[] = RAW_ESTATES.map((e) => ({
-  ...e,
-  blocks: e.blocks ?? DEFAULT_BLOCKS,
-}));
+/* ============================== Utilities ============================== */
+
+// Build a direct WA chat link to your business number, prefilled with estate name.
+// Change the number/message below if needed.
+const BUSINESS_WA = '628132020531';
+function waLinkFor(estateName: string) {
+  const text = `Halo Pak Sayur, saya dari perumahan ${estateName}. Mohon info jadwal kunjungan dan cara bergabung Klub Privé. 
+Nama:
+Blok/Alamat:
+Catatan:`;
+  return `https://wa.me/${BUSINESS_WA}?text=${encodeURIComponent(text)}`;
+}
 
 /* ============================== UI Components ============================== */
 
-// Inline WhatsApp SVG icon (gold theme-friendly)
+// WhatsApp SVG icon (gold-friendly)
 function WaIcon({ className = 'h-6 w-6' }: { className?: string }) {
   return (
     <svg
@@ -90,37 +76,27 @@ function WaIcon({ className = 'h-6 w-6' }: { className?: string }) {
   );
 }
 
-function EstateCard({ name, blocks }: { name: string; blocks: BlockGroup[] }) {
+// Single-button card: Estate name + WA icon on the right
+function EstateCard({ name }: { name: string }) {
   return (
-    <div className="card p-5">
-      <div className="mb-3 font-serif text-xl">{name}</div>
+    <div className="card p-5 flex items-center justify-between">
+      <div className="font-serif text-xl">{name}</div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        {blocks.map((b) => (
-          <div
-            key={b.label}
-            className="rounded-xl border border-gold/15 bg-deep2 p-3 flex items-center justify-between"
-          >
-            <div className="text-gold">{b.label}</div>
-
-            <a
-              href={b.invite}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label={`Gabung WhatsApp ${name} – ${b.label}`}
-              title={`Gabung WhatsApp ${name} – ${b.label}`}
-              className="
-                inline-flex h-11 w-11 items-center justify-center
-                rounded-full border border-gold/25 bg-gold/10
-                hover:bg-gold/20 hover:border-gold/35
-                transition-colors duration-200
-              "
-            >
-              <WaIcon className="h-6 w-6 text-gold" />
-            </a>
-          </div>
-        ))}
-      </div>
+      <a
+        href={waLinkFor(name)}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label={`Chat WhatsApp untuk ${name}`}
+        title={`Chat WhatsApp untuk ${name}`}
+        className="
+          inline-flex h-12 w-12 items-center justify-center
+          rounded-full border border-gold/25 bg-gold/10
+          hover:bg-gold/20 hover:border-gold/35
+          transition-colors duration-200
+        "
+      >
+        <WaIcon className="h-6 w-6 text-gold" />
+      </a>
     </div>
   );
 }
@@ -129,7 +105,7 @@ function EstateCard({ name, blocks }: { name: string; blocks: BlockGroup[] }) {
 
 export default function ClubPage() {
   const [area, setArea] = useState<AreaId>('all');
-  const [q, setQ] = useState('');
+  const [q,   setQ]   = useState('');
 
   const filtered = useMemo(() => {
     const key = q.trim().toLowerCase();
@@ -160,8 +136,8 @@ export default function ClubPage() {
         <div className="mx-auto max-w-3xl text-center">
           <h1 className="font-serif text-5xl leading-tight md:text-6xl">Pak Sayur Privé Club</h1>
           <p className="mt-3 text-lg text-goldmuted">
-            Pilih <span className="text-gold">perumahan</span> & <span className="text-gold">blok</span> Anda, lalu
-            klik ikon WhatsApp untuk bergabung ke grup—jadwal kunjungan, promo, & concierge RT/RW.
+            Pilih <span className="text-gold">perumahan</span> Anda, lalu klik ikon WhatsApp
+            untuk chat langsung dengan admin Pak Sayur (jadwal kunjungan, promo, & concierge RT/RW).
           </p>
         </div>
       </section>
@@ -182,7 +158,7 @@ export default function ClubPage() {
           {/* Area chips */}
           <div className="flex flex-wrap gap-2">
             {([
-              { id: 'all', label: 'Semua Surabaya' },
+              { id: 'all',  label: 'Semua Surabaya' },
               { id: 'barat', label: 'Surabaya Barat' },
               { id: 'timur', label: 'Surabaya Timur' },
             ] as { id: AreaId; label: string }[]).map((chip) => (
@@ -202,8 +178,8 @@ export default function ClubPage() {
 
           {/* Ask for new estate */}
           <a
-            href={`https://wa.me/628132020531?text=${encodeURIComponent(
-              'Halo admin Pak Sayur, saya mau request grup perumahan baru: [TULIS NAMA PERUMAHAN & BLOK]. Terima kasih!'
+            href={`https://wa.me/${BUSINESS_WA}?text=${encodeURIComponent(
+              'Halo admin Pak Sayur, saya mau request penambahan perumahan baru untuk Klub Privé: [TULIS NAMA PERUMAHAN]. Terima kasih!'
             )}`}
             target="_blank"
             rel="noopener noreferrer"
@@ -217,7 +193,7 @@ export default function ClubPage() {
       {/* LIST */}
       <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
         {filtered.map((e) => (
-          <EstateCard key={e.id} name={e.name} blocks={e.blocks} />
+          <EstateCard key={e.id} name={e.name} />
         ))}
       </div>
 
