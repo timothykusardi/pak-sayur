@@ -7,60 +7,188 @@ import { useMemo, useState } from 'react';
 
 /* ============================= Types & Data ============================= */
 
-type AreaId = 'all' | 'barat' | 'timur';
+type AreaId = 'all' | 'barat' | 'tengah' | 'selatan' | 'timur';
 
 type Estate = {
   id: string;
   name: string;
-  area: Exclude<AreaId, 'all'>; // only 'barat' | 'timur'
+  area: Exclude<AreaId, 'all'>; // 'barat' | 'tengah' | 'selatan' | 'timur'
+  waGroupUrl: string;           // link undangan grup WhatsApp
 };
 
-// List perumahan — same as before, just no blocks:
+// List perumahan / area + link grup WhatsApp
 const ESTATES: Estate[] = [
   /* --- SURABAYA BARAT --- */
-  { id: 'graha-family',        name: 'Graha Family',        area: 'barat' },
-  { id: 'royal-residence',     name: 'Royal Residence',     area: 'barat' },
-  { id: 'dian-istana',         name: 'Dian Istana',         area: 'barat' },
-  { id: 'wisata-bukit-mas',    name: 'Wisata Bukit Mas',    area: 'barat' },
-  { id: 'villa-bukit-mas',     name: 'Villa Bukit Mas',     area: 'barat' },
-  { id: 'graha-natura',        name: 'Graha Natura',        area: 'barat' },
-  { id: 'villa-bukit-regency', name: 'Villa Bukit Regency', area: 'barat' },
-  { id: 'darmo-harapan',       name: 'Darmo Harapan Indah', area: 'barat' },
-  { id: 'pradah-indah',        name: 'Pradah Indah',        area: 'barat' },
-  { id: 'grand-pakuwon',       name: 'Grand Pakuwon',       area: 'barat' },
-  { id: 'citraland-bukit-palma', name: 'CitraLand – Bukit Palma', area: 'barat' },
-  { id: 'citraland-bukit-golf',  name: 'CitraLand – Bukit Golf',  area: 'barat' },
-  { id: 'taman-puspa-indah',   name: 'Taman Puspa Indah (CitraLand)', area: 'barat' },
+  {
+    id: 'graha-family',
+    name: 'Graha Family',
+    area: 'barat',
+    waGroupUrl: 'https://chat.whatsapp.com/J7G80pQMt5NA5N7l7ex2Oi',
+  },
+  {
+    id: 'royal-residence',
+    name: 'Royal Residence',
+    area: 'barat',
+    waGroupUrl: 'https://chat.whatsapp.com/KGZn2SmrdZOG5IyIUDB0ez',
+  },
+  {
+    id: 'dian-istana',
+    name: 'Dian Istana',
+    area: 'barat',
+    waGroupUrl: 'https://chat.whatsapp.com/Kk9VCDA3bFI9jDYzTwm59h',
+  },
+  {
+    id: 'wisata-bukit-mas',
+    name: 'Wisata Bukit Mas',
+    area: 'barat',
+    waGroupUrl: 'https://chat.whatsapp.com/DL2IhVJmgVO8Br8qQPGHEL',
+  },
+  {
+    id: 'villa-bukit-mas',
+    name: 'Villa Bukit Mas',
+    area: 'barat',
+    waGroupUrl: 'https://chat.whatsapp.com/Ly69Pp6lnktHvmgQe43yAm',
+  },
+  {
+    id: 'graha-natura',
+    name: 'Graha Natura',
+    area: 'barat',
+    waGroupUrl: 'https://chat.whatsapp.com/HWn5MC1gshKG1Z3uAnd9JW',
+  },
+  {
+    id: 'villa-bukit-regency',
+    name: 'Villa Bukit Regency',
+    area: 'barat',
+    waGroupUrl: 'https://chat.whatsapp.com/B6HbIp0GH9f0LXedyZaeg9',
+  },
+  {
+    id: 'darmo-harapan',
+    name: 'Darmo Harapan Indah',
+    area: 'barat',
+    waGroupUrl: 'https://chat.whatsapp.com/FENup9R4JBiAAGTbcVQ8tD',
+  },
+  {
+    id: 'pradah-indah',
+    name: 'Pradah Indah',
+    area: 'barat',
+    waGroupUrl: 'https://chat.whatsapp.com/HbqPWC3xSJi3l6pyW1mrId',
+  },
+  {
+    id: 'grand-pakuwon',
+    name: 'Grand Pakuwon',
+    area: 'barat',
+    waGroupUrl: 'https://chat.whatsapp.com/IqVt1SPONKHH58hAGlZtxX',
+  },
+
+  /* --- SURABAYA TENGAH --- */
+  {
+    id: 'darmo-area',
+    name: 'Darmo Area',
+    area: 'tengah',
+    waGroupUrl: 'https://chat.whatsapp.com/J84aLsXpN3pF4E6gQz2Be5',
+  },
+  {
+    id: 'gubeng-area',
+    name: 'Gubeng Area',
+    area: 'tengah',
+    waGroupUrl: 'https://chat.whatsapp.com/Bvkc6ToNPCjDth16G9xAks',
+  },
+
+  /* --- SURABAYA SELATAN --- */
+  {
+    id: 'margorejo-area',
+    name: 'Margorejo Area',
+    area: 'selatan',
+    waGroupUrl: 'https://chat.whatsapp.com/BlIBkz71KvJAHJmvqKGkRa',
+  },
+  {
+    id: 'jemursari-area',
+    name: 'Jemursari Area',
+    area: 'selatan',
+    waGroupUrl: 'https://chat.whatsapp.com/IS8XWDCFUPc4dsAT35ELzU',
+  },
+  {
+    id: 'ketintang-area',
+    name: 'Ketintang Area',
+    area: 'selatan',
+    waGroupUrl: 'https://chat.whatsapp.com/BbiRIV1v9hhFyAtPlR9tQ0',
+  },
 
   /* --- SURABAYA TIMUR --- */
-  { id: 'pakuwon-city',        name: 'Pakuwon City',        area: 'timur' },
-  { id: 'kertajaya-indah',     name: 'Kertajaya Indah Regency', area: 'timur' },
-  { id: 'dharmahusada-indah',  name: 'Dharmahusada Indah',  area: 'timur' },
-  { id: 'galaxy-bumi-permai',  name: 'Galaxy Bumi Permai',  area: 'timur' },
-  { id: 'puri-galaxy',         name: 'Puri Galaxy',         area: 'timur' },
-  { id: 'manyar-residence',    name: 'Manyar Residence',    area: 'timur' },
-  { id: 'mulyosari',           name: 'Mulyosari Area',      area: 'timur' },
-  { id: 'sutorejo-prima',      name: 'Sutorejo Prima',      area: 'timur' },
-  { id: 'east-coast-res',      name: 'East Coast Residence',area: 'timur' },
-  { id: 'laguna-residence',    name: 'Laguna Residence',    area: 'timur' },
+  {
+    id: 'pakuwon-city',
+    name: 'Pakuwon City',
+    area: 'timur',
+    waGroupUrl: 'https://chat.whatsapp.com/JWMrfsTSSWVAMt5WTZT0Xy',
+  },
+  {
+    id: 'kertajaya-indah',
+    name: 'Kertajaya Indah Regency',
+    area: 'timur',
+    waGroupUrl: 'https://chat.whatsapp.com/D3j4DI1rhyk3DmiWEbQcUl',
+  },
+  {
+    id: 'dharmahusada-indah',
+    name: 'Dharmahusada Indah',
+    area: 'timur',
+    waGroupUrl: 'https://chat.whatsapp.com/Fp1UQOTnJWg1IkiJ4YmHG9',
+  },
+  {
+    id: 'galaxy-bumi-permai',
+    name: 'Galaxy Bumi Permai',
+    area: 'timur',
+    waGroupUrl: 'https://chat.whatsapp.com/B8yVlpnnUeAE9Hw2cXOW6N',
+  },
+  {
+    id: 'puri-galaxy',
+    name: 'Puri Galaxy',
+    area: 'timur',
+    waGroupUrl: 'https://chat.whatsapp.com/LvTcrGKfLy293eoX06PhQY',
+  },
+  {
+    id: 'manyar-residence',
+    name: 'Manyar Residence',
+    area: 'timur',
+    waGroupUrl: 'https://chat.whatsapp.com/LF5Pse0W4z0JzOZ7ZIN5uW',
+  },
+  {
+    id: 'mulyosari-area',
+    name: 'Mulyosari Area',
+    area: 'timur',
+    waGroupUrl: 'https://chat.whatsapp.com/HVg97N79f3s2XERy7xszkz',
+  },
+  {
+    id: 'sutorejo-prima',
+    name: 'Sutorejo Prima',
+    area: 'timur',
+    waGroupUrl: 'https://chat.whatsapp.com/HVg97N79f3s2XERy7xszkz',
+  },
+  {
+    id: 'east-coast-res',
+    name: 'East Coast Residence',
+    area: 'timur',
+    waGroupUrl: 'https://chat.whatsapp.com/Iuq7nCQ1tS3IKshcnH0wjX',
+  },
+  {
+    id: 'laguna-residence',
+    name: 'Laguna Residence',
+    area: 'timur',
+    waGroupUrl: 'https://chat.whatsapp.com/Hh9zqjkHGENB07kGD0STI2',
+  },
 ];
 
 /* ============================== Utilities ============================== */
 
-// Build a direct WA chat link to your business number, prefilled with estate name.
-// Change the number/message below if needed.
-const BUSINESS_WA = '628132020531';
-function waLinkFor(estateName: string) {
-  const text = `Halo Pak Sayur, saya dari perumahan ${estateName}. Mohon info jadwal kunjungan dan cara bergabung Klub Privé. 
-Nama:
-Blok/Alamat:
-Catatan:`;
-  return `https://wa.me/${BUSINESS_WA}?text=${encodeURIComponent(text)}`;
+// WA bisnis hanya untuk tombol "Minta Perumahan Baru"
+const BUSINESS_WA = '6285190653341';
+
+function waLinkFor(estate: Estate) {
+  // Semua estate di atas sudah punya waGroupUrl → langsung pakai
+  return estate.waGroupUrl;
 }
 
 /* ============================== UI Components ============================== */
 
-// WhatsApp SVG icon (gold-friendly)
 function WaIcon({ className = 'h-6 w-6' }: { className?: string }) {
   return (
     <svg
@@ -76,18 +204,19 @@ function WaIcon({ className = 'h-6 w-6' }: { className?: string }) {
   );
 }
 
-// Single-button card: Estate name + WA icon on the right
-function EstateCard({ name }: { name: string }) {
+function EstateCard({ estate }: { estate: Estate }) {
+  const label = `Gabung grup WhatsApp ${estate.name}`;
+
   return (
     <div className="card p-5 flex items-center justify-between">
-      <div className="font-serif text-xl">{name}</div>
+      <div className="font-serif text-xl">{estate.name}</div>
 
       <a
-        href={waLinkFor(name)}
+        href={waLinkFor(estate)}
         target="_blank"
         rel="noopener noreferrer"
-        aria-label={`Chat WhatsApp untuk ${name}`}
-        title={`Chat WhatsApp untuk ${name}`}
+        aria-label={label}
+        title={label}
         className="
           inline-flex h-12 w-12 items-center justify-center
           rounded-full border border-gold/25 bg-gold/10
@@ -134,10 +263,12 @@ export default function ClubPage() {
         </div>
 
         <div className="mx-auto max-w-3xl text-center">
-          <h1 className="font-serif text-5xl leading-tight md:text-6xl">Pak Sayur Privé Club</h1>
+          <h1 className="font-serif text-5xl leading-tight md:text-6xl">
+            Pak Sayur Privé Club
+          </h1>
           <p className="mt-3 text-lg text-goldmuted">
-            Pilih <span className="text-gold">perumahan</span> Anda, lalu klik ikon WhatsApp
-            untuk chat langsung dengan admin Pak Sayur (jadwal kunjungan, promo, & concierge RT/RW).
+            Pilih <span className="text-gold">perumahan / area</span> Anda, lalu klik ikon WhatsApp
+            untuk langsung bergabung ke grup resmi Pak Sayur Privé Club.
           </p>
         </div>
       </section>
@@ -150,7 +281,7 @@ export default function ClubPage() {
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Cari perumahan… (contoh: Graha, Royal, Pakuwon)"
+              placeholder="Cari perumahan/area… (contoh: Graha, Royal, Margorejo)"
               className="w-full rounded-xl border border-gold/15 bg-deep2 px-4 py-2 text-gold placeholder:text-goldmuted focus:outline-none focus:ring-1 focus:ring-gold/30"
             />
           </div>
@@ -158,9 +289,11 @@ export default function ClubPage() {
           {/* Area chips */}
           <div className="flex flex-wrap gap-2">
             {([
-              { id: 'all',  label: 'Semua Surabaya' },
-              { id: 'barat', label: 'Surabaya Barat' },
-              { id: 'timur', label: 'Surabaya Timur' },
+              { id: 'all',     label: 'Semua Surabaya' },
+              { id: 'barat',   label: 'Surabaya Barat' },
+              { id: 'tengah',  label: 'Surabaya Tengah' },
+              { id: 'selatan', label: 'Surabaya Selatan' },
+              { id: 'timur',   label: 'Surabaya Timur' },
             ] as { id: AreaId; label: string }[]).map((chip) => (
               <button
                 key={chip.id}
@@ -179,7 +312,7 @@ export default function ClubPage() {
           {/* Ask for new estate */}
           <a
             href={`https://wa.me/${BUSINESS_WA}?text=${encodeURIComponent(
-              'Halo admin Pak Sayur, saya mau request penambahan perumahan baru untuk Klub Privé: [TULIS NAMA PERUMAHAN]. Terima kasih!'
+              'Halo admin Pak Sayur, saya mau request penambahan perumahan/area baru untuk Klub Privé: [TULIS NAMA PERUMAHAN/AREA]. Terima kasih!'
             )}`}
             target="_blank"
             rel="noopener noreferrer"
@@ -193,7 +326,7 @@ export default function ClubPage() {
       {/* LIST */}
       <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
         {filtered.map((e) => (
-          <EstateCard key={e.id} name={e.name} />
+          <EstateCard key={e.id} estate={e} />
         ))}
       </div>
 
@@ -206,11 +339,13 @@ export default function ClubPage() {
 
       {/* FOOTER NAV */}
       <div className="mt-12 flex justify-center gap-3">
-        <Link href="/" className="btn">Kembali ke Home</Link>
+        <Link href="/" className="btn">
+          Kembali ke Home
+        </Link>
       </div>
 
       <div className="mt-8 text-center text-sm text-goldmuted">
-        Daftar perumahan di atas bersifat indikatif (tidak semua tercantum). Jika perumahan Anda belum ada,
+        Daftar perumahan/area di atas bersifat indikatif. Jika perumahan/area Anda belum ada,
         silakan klik <span className="text-gold">“Minta Perumahan Baru”</span>.
       </div>
     </main>

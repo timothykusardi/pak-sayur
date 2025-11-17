@@ -4,7 +4,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { useState } from 'react';
 
-const ADMIN_WA = '628132020531';
+const ADMIN_WA = '6285190653341';
 
 function WaIcon({ className = 'h-5 w-5' }: { className?: string }) {
   return (
@@ -76,7 +76,7 @@ export default function KontakPage() {
         <div className="card p-6">
           <h2 className="font-serif text-2xl">Gabung Privé Club (Disarankan)</h2>
           <p className="mt-2 text-goldmuted">
-            Dapatkan info jadwal per blok & prioritas stok. Klik untuk memilih perumahan & blok,
+            Dapatkan info jadwal per perumahan & prioritas stok. Klik untuk memilih perumahan,
             lalu bergabung ke grup WhatsApp.
           </p>
           <Link href="/club" className="btn btn-primary mt-4 inline-flex items-center gap-2">
