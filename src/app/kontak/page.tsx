@@ -76,11 +76,11 @@ export default function KontakPage() {
         <div className="card p-6">
           <h2 className="font-serif text-2xl">Gabung Privé Club (Disarankan)</h2>
           <p className="mt-2 text-goldmuted">
-            Dapatkan info jadwal per perumahan & prioritas stok. Klik untuk memilih perumahan,
+            Dapatkan info jadwal per perumahan & prioritas stok. Klik untuk memilih perumahan ,
             lalu bergabung ke grup WhatsApp.
           </p>
           <Link href="/club" className="btn btn-primary mt-4 inline-flex items-center gap-2">
-            <WaIcon /> Pilih Perumahan & Blok
+            <WaIcon /> Pilih Perumahan
           </Link>
         </div>
 
