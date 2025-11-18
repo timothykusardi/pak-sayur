@@ -1,15 +1,25 @@
+// app/api/whatsapp/webhook/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 
+export const dynamic = 'force-dynamic';
+
+// ==== ENV CONFIG (sesuaikan di Vercel) ====
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN!;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN!;
 const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID!;
 
-/* ========================= Helper kirim WhatsApp ========================= */
+if (!VERIFY_TOKEN || !WHATSAPP_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
+  console.warn(
+    '[WhatsApp] ENV vars missing. Please set WHATSAPP_VERIFY_TOKEN, WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID'
+  );
+}
+
+// ==== HELPER: kirim text biasa ====
 
 async function sendWhatsAppText(to: string, body: string) {
   const url = `https://graph.facebook.com/v21.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
-  await fetch(url, {
+  const res = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -25,66 +35,70 @@ async function sendWhatsAppText(to: string, body: string) {
       },
     }),
   });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    console.error('[WhatsApp] sendWhatsAppText error', res.status, errText);
+  }
 }
 
-/* ========================= GET = verifikasi webhook ====================== */
+// ==== HELPER: kirim menu tombol ====
 
-export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const mode = searchParams.get('hub.mode');
-  const token = searchParams.get('hub.verify_token');
-  const challenge = searchParams.get('hub.challenge');
+async function sendWhatsAppMenuButtons(to: string) {
+  const url = `https://graph.facebook.com/v21.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
-  if (mode === 'subscribe' && token === VERIFY_TOKEN) {
-    // Meta verify OK
-    return new NextResponse(challenge ?? '', { status: 200 });
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: {
+          text: [
+            'Halo kak 👋, selamat datang di *Pak Sayur Bot* 🌿',
+            '',
+            'Silakan pilih salah satu:',
+          ].join('\n'),
+        },
+        action: {
+          buttons: [
+            {
+              type: 'reply',
+              reply: { id: 'order_catalog', title: 'Order katalog' },
+            },
+            {
+              type: 'reply',
+              reply: { id: 'order_manual', title: 'Order manual' },
+            },
+            {
+              type: 'reply',
+              reply: { id: 'chat_cs', title: 'Chat CS' },
+            },
+          ],
+        },
+      },
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    console.error('[WhatsApp] sendWhatsAppMenuButtons error', res.status, errText);
   }
-
-  return new NextResponse('Forbidden', { status: 403 });
 }
 
-/* ========================= Teks menu ====================== */
+// ==== HELPER: proses pilihan menu (dipakai tombol & angka) ====
 
-const WELCOME_MENU = [
-  'Halo kak 👋, selamat datang di *Pak Sayur Bot* 🌿',
-  '',
-  'Balas dengan angka:',
-  '1️⃣ Order lewat katalog',
-  '2️⃣ Order ketik manual',
-  '3️⃣ Chat ke CS (0851-9065-3341)',
-].join('\n');
-
-/* ========================= POST = handle chat ============================ */
-
-export async function POST(req: NextRequest) {
-  const body = await req.json();
-
-  // Safety: kalau bukan event WA, langsung ignore
-  if (body.object !== 'whatsapp_business_account') {
-    return NextResponse.json({ status: 'ignored' }, { status: 200 });
-  }
-
-  const entry = body.entry?.[0];
-  const changes = entry?.changes?.[0];
-  const value = changes?.value;
-  const message = value?.messages?.[0];
-
-  // Tidak ada message (misal cuma status delivery) → abaikan
-  if (!message || message.type !== 'text') {
-    return NextResponse.json({ status: 'no-text' }, { status: 200 });
-  }
-
-  const from = message.from as string;        // nomor pengirim (62…)
-  const text = (message.text?.body || '') as string;
-
-  const t = text.toLowerCase().trim();
-
-  // ========== Routing logika sederhana ==========
-
-  if (t === 'menu' || t === 'start' || t === 'halo') {
-    await sendWhatsAppText(from, WELCOME_MENU);
-
-  } else if (t === '1') {
+async function handleMenuSelection(
+  from: string,
+  choice: 'catalog' | 'manual' | 'cs'
+) {
+  if (choice === 'catalog') {
     await sendWhatsAppText(
       from,
       [
@@ -96,11 +110,10 @@ export async function POST(req: NextRequest) {
         '- Bayam x2',
         '- Brokoli x1',
         '',
-        'Nanti ke depan kita kirim link katalog interaktif ya 🌿',
+        'Ke depan akan ada link katalog interaktif ya 🌿',
       ].join('\n')
     );
-
-  } else if (t === '2') {
+  } else if (choice === 'manual') {
     await sendWhatsAppText(
       from,
       [
@@ -121,23 +134,113 @@ export async function POST(req: NextRequest) {
         '- Brokoli x1',
       ].join('\n')
     );
-
-  } else if (t === '3') {
+  } else if (choice === 'cs') {
     await sendWhatsAppText(
       from,
       'Kalau mau chat langsung dengan CS manusia 👩‍🍳, klik: https://wa.me/6285190653341'
     );
+  }
+}
 
-  } else {
-    // Fallback kalau user ngaco / pertama kali chat
-    await sendWhatsAppText(
-      from,
-      [
-        'Halo kak 👋',
-        'Ketik *menu* untuk melihat pilihan di Pak Sayur Bot 🌿',
-      ].join('\n')
-    );
+// ======================================================================
+// GET  = verifikasi webhook (sudah kamu pakai waktu setup awal)
+// ======================================================================
+
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const mode = searchParams.get('hub.mode');
+  const token = searchParams.get('hub.verify_token');
+  const challenge = searchParams.get('hub.challenge');
+
+  if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+    return new NextResponse(challenge ?? '', { status: 200 });
   }
 
-  return NextResponse.json({ status: 'ok' }, { status: 200 });
+  return new NextResponse('Forbidden', { status: 403 });
+}
+
+// ======================================================================
+// POST = handle chat masuk
+// ======================================================================
+
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json();
+
+    if (body.object !== 'whatsapp_business_account') {
+      return NextResponse.json({ status: 'ignored' }, { status: 200 });
+    }
+
+    const entry = body.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const value = changes?.value;
+    const message = value?.messages?.[0];
+
+    if (!message) {
+      // Bisa jadi ini cuma status read/delivered, bukan chat
+      return NextResponse.json({ status: 'no-message' }, { status: 200 });
+    }
+
+    const from = message.from as string;
+
+    // =============== 1) User klik tombol =================
+    if (
+      message.type === 'interactive' &&
+      message.interactive?.type === 'button_reply'
+    ) {
+      const reply = message.interactive.button_reply;
+      const id = reply.id as string; // 'order_catalog' | 'order_manual' | 'chat_cs'
+
+      if (id === 'order_catalog') {
+        await handleMenuSelection(from, 'catalog');
+      } else if (id === 'order_manual') {
+        await handleMenuSelection(from, 'manual');
+      } else if (id === 'chat_cs') {
+        await handleMenuSelection(from, 'cs');
+      }
+
+      return NextResponse.json({ status: 'ok-button' }, { status: 200 });
+    }
+
+    // =============== 2) User kirim teks biasa =============
+
+    if (message.type === 'text') {
+      const text = (message.text?.body || '') as string;
+      const t = text.toLowerCase().trim();
+
+      // Keyword untuk memanggil menu
+      if (t === 'menu' || t === 'start' || t === 'halo') {
+        await sendWhatsAppMenuButtons(from);
+        return NextResponse.json({ status: 'ok-menu' }, { status: 200 });
+      }
+
+      // Backup: kalau user balas angka 1/2/3 instead of klik tombol
+      if (t === '1') {
+        await handleMenuSelection(from, 'catalog');
+        return NextResponse.json({ status: 'ok-1' }, { status: 200 });
+      }
+      if (t === '2') {
+        await handleMenuSelection(from, 'manual');
+        return NextResponse.json({ status: 'ok-2' }, { status: 200 });
+      }
+      if (t === '3') {
+        await handleMenuSelection(from, 'cs');
+        return NextResponse.json({ status: 'ok-3' }, { status: 200 });
+      }
+
+      // Fallback: apa pun yang dia ketik → kirim menu tombol
+      await sendWhatsAppMenuButtons(from);
+      return NextResponse.json({ status: 'ok-fallback-text' }, { status: 200 });
+    }
+
+    // =============== 3) Tipe pesan lain (gambar, audio, dll) ===========
+    // Untuk sekarang: balas dengan menu juga
+
+    await sendWhatsAppMenuButtons(from);
+    return NextResponse.json({ status: 'ok-other-type' }, { status: 200 });
+  } catch (err) {
+    console.error('[WhatsApp] Webhook error', err);
+    // Tetap balas 200 supaya WA nggak retry terus
+    return NextResponse.json({ status: 'error-but-ack' }, { status: 200 });
+  }
 }
