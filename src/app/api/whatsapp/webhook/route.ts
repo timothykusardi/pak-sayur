@@ -14,7 +14,94 @@ if (!VERIFY_TOKEN || !WHATSAPP_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
   );
 }
 
-// ==== HELPER: kirim text biasa ====
+/* ===================== Types & Parser Manual Order ===================== */
+
+type ManualOrderItem = {
+  raw: string; // nanti bisa dipecah jadi SKU + qty
+};
+
+type ManualOrderPayload = {
+  customer_phone: string;
+  raw_text: string;
+  name?: string;
+  address?: string;
+  items: ManualOrderItem[];
+};
+
+function parseManualOrderText(from: string, text: string): ManualOrderPayload {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  let section: 'none' | 'name' | 'address' | 'order' = 'none';
+  let name = '';
+  const addressLines: string[] = [];
+  const items: ManualOrderItem[] = [];
+
+  for (const line of lines) {
+    const lower = line.toLowerCase();
+
+    if (lower.startsWith('nama:')) {
+      name = line.slice(line.indexOf(':') + 1).trim();
+      section = 'name';
+      continue;
+    }
+
+    if (lower.startsWith('alamat')) {
+      const val =
+        line.indexOf(':') >= 0
+          ? line.slice(line.indexOf(':') + 1).trim()
+          : '';
+      if (val) addressLines.push(val);
+      section = 'address';
+      continue;
+    }
+
+    if (lower.startsWith('order')) {
+      section = 'order';
+      continue;
+    }
+
+    if (section === 'address') {
+      addressLines.push(line);
+    } else if (section === 'order') {
+      const cleaned = line.replace(/^[-•\s]+/, '');
+      if (cleaned) items.push({ raw: cleaned });
+    }
+  }
+
+  return {
+    customer_phone: from,
+    raw_text: text,
+    name: name || undefined,
+    address: addressLines.join(' '),
+    items,
+  };
+}
+
+function formatManualOrderConfirmation(order: ManualOrderPayload): string {
+  const name = order.name || '(belum diisi)';
+  const address = order.address || '(belum diisi)';
+  const itemsText = order.items.length
+    ? order.items.map((i) => `- ${i.raw}`).join('\n')
+    : '- (belum ada item)';
+
+  return [
+    'Terima kasih kak, berikut ringkasan order kakak 👇',
+    '',
+    `Nama: ${name}`,
+    `Alamat: ${address}`,
+    '',
+    'Order:',
+    itemsText,
+    '',
+    'Kalau sudah benar, balas: *OK* ya kak 🙏',
+    'Kalau mau revisi, silakan kirim ulang format NAMA / ALAMAT / ORDER.',
+  ].join('\n');
+}
+
+/* ====================== Helpers kirim pesan WA ======================== */
 
 async function sendWhatsAppText(to: string, body: string) {
   const url = `https://graph.facebook.com/v21.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
@@ -41,8 +128,6 @@ async function sendWhatsAppText(to: string, body: string) {
     console.error('[WhatsApp] sendWhatsAppText error', res.status, errText);
   }
 }
-
-// ==== HELPER: kirim menu tombol ====
 
 async function sendWhatsAppMenuButtons(to: string) {
   const url = `https://graph.facebook.com/v21.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
@@ -92,8 +177,6 @@ async function sendWhatsAppMenuButtons(to: string) {
   }
 }
 
-// ==== HELPER: proses pilihan menu (dipakai tombol & angka) ====
-
 async function handleMenuSelection(
   from: string,
   choice: 'catalog' | 'manual' | 'cs'
@@ -142,9 +225,7 @@ async function handleMenuSelection(
   }
 }
 
-// ======================================================================
-// GET  = verifikasi webhook (sudah kamu pakai waktu setup awal)
-// ======================================================================
+/* ============================ GET: verify ============================= */
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -159,9 +240,7 @@ export async function GET(req: NextRequest) {
   return new NextResponse('Forbidden', { status: 403 });
 }
 
-// ======================================================================
-// POST = handle chat masuk
-// ======================================================================
+/* ============================ POST: webhook =========================== */
 
 export async function POST(req: NextRequest) {
   try {
@@ -177,13 +256,13 @@ export async function POST(req: NextRequest) {
     const message = value?.messages?.[0];
 
     if (!message) {
-      // Bisa jadi ini cuma status read/delivered, bukan chat
+      // Bisa jadi cuma status delivery/read
       return NextResponse.json({ status: 'no-message' }, { status: 200 });
     }
 
     const from = message.from as string;
 
-    // =============== 1) User klik tombol =================
+    // =============== 1) User klik tombol (interactive) =================
     if (
       message.type === 'interactive' &&
       message.interactive?.type === 'button_reply'
@@ -202,10 +281,32 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: 'ok-button' }, { status: 200 });
     }
 
-    // =============== 2) User kirim teks biasa =============
+    // =============== 2) User kirim teks biasa ==========================
 
     if (message.type === 'text') {
       const text = (message.text?.body || '') as string;
+      const lowerFull = text.toLowerCase();
+
+      // Deteksi format NAMA / ALAMAT / ORDER
+      if (
+        lowerFull.includes('nama:') &&
+        lowerFull.includes('alamat') &&
+        lowerFull.includes('order')
+      ) {
+        const parsed = parseManualOrderText(from, text);
+
+        console.log(
+          '[PakSayur] Manual order candidate:',
+          JSON.stringify(parsed, null, 2)
+        );
+
+        await sendWhatsAppText(from, formatManualOrderConfirmation(parsed));
+        return NextResponse.json(
+          { status: 'ok-manual-order' },
+          { status: 200 }
+        );
+      }
+
       const t = text.toLowerCase().trim();
 
       // Keyword untuk memanggil menu
@@ -230,12 +331,13 @@ export async function POST(req: NextRequest) {
 
       // Fallback: apa pun yang dia ketik → kirim menu tombol
       await sendWhatsAppMenuButtons(from);
-      return NextResponse.json({ status: 'ok-fallback-text' }, { status: 200 });
+      return NextResponse.json(
+        { status: 'ok-fallback-text' },
+        { status: 200 }
+      );
     }
 
     // =============== 3) Tipe pesan lain (gambar, audio, dll) ===========
-    // Untuk sekarang: balas dengan menu juga
-
     await sendWhatsAppMenuButtons(from);
     return NextResponse.json({ status: 'ok-other-type' }, { status: 200 });
   } catch (err) {
