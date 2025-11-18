@@ -16,7 +16,7 @@ if (!VERIFY_TOKEN || !WHATSAPP_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
 
 /* ===================== Types & Parser Manual Order ===================== */
 
-// Tambah varian typo di sini kalau perlu
+// Kata kunci + typo yang masih diterima parser
 const NAME_KEYS = ['nama', 'nm', 'nma'];
 const ADDRESS_KEYS = ['alamat', 'almt', 'almat', 'alamt', 'alt', 'alm'];
 const ORDER_KEYS = ['order', 'ordr', 'odr', 'oder'];
@@ -89,12 +89,9 @@ function parseManualOrderText(from: string, text: string): ManualOrderPayload {
       continue;
     }
 
-    // lanjutan alamat
     if (section === 'address') {
       addressLines.push(line);
-    }
-    // lanjutan order
-    else if (section === 'order') {
+    } else if (section === 'order') {
       const cleaned = line.replace(/^[-•\s]+/, '').trim();
       if (cleaned) items.push({ raw: cleaned });
     }
@@ -226,20 +223,25 @@ async function handleMenuSelection(
       ].join('\n')
     );
   } else if (choice === 'manual') {
+    // ⚠️ Pesan rapi, TANPA contoh typo
     await sendWhatsAppText(
       from,
       [
         'Oke kak, *order ketik manual* ✍️',
         '',
-        'Kirim dengan format (boleh huruf kecil / besar, boleh typo dikit):',
-        'nama: ... (atau nm / nma)',
-        'alamat: ... (atau almt / almat / alamt / alt)',
-        'order: ... (atau ordr / odr)',
+        'Kirim dengan format:',
+        'NAMA:',
+        'ALAMAT LENGKAP:',
+        'ORDER:',
+        '- Bayam x2',
+        '- Wortel 500gr',
         '',
         'Contoh:',
-        'nm: Budi',
-        'almt graha family blok A2 no 5',
-        'odr: Bayam x2 wortel 1',
+        'NAMA: Budi',
+        'ALAMAT: Graha Family, Jl. XYZ No. 10',
+        'ORDER:',
+        '- Bayam x2',
+        '- Brokoli x1',
       ].join('\n')
     );
   } else if (choice === 'cs') {
