@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 
-// ==== ENV CONFIG (sesuaikan di Vercel) ====
+// ==== ENV CONFIG ====
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN!;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN!;
 const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID!;
@@ -16,8 +16,13 @@ if (!VERIFY_TOKEN || !WHATSAPP_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
 
 /* ===================== Types & Parser Manual Order ===================== */
 
+// Tambah varian typo di sini kalau perlu
+const NAME_KEYS = ['nama', 'nm', 'nma'];
+const ADDRESS_KEYS = ['alamat', 'almt', 'almat', 'alamt', 'alt', 'alm'];
+const ORDER_KEYS = ['order', 'ordr', 'odr', 'oder'];
+
 type ManualOrderItem = {
-  raw: string; // nanti bisa dipecah jadi SKU + qty
+  raw: string;
 };
 
 type ManualOrderPayload = {
@@ -28,11 +33,31 @@ type ManualOrderPayload = {
   items: ManualOrderItem[];
 };
 
+function matchKeyword(line: string, keywords: string[]): string | null {
+  const lower = line.toLowerCase().trimStart();
+  for (const k of keywords) {
+    if (lower.startsWith(k)) {
+      return k;
+    }
+  }
+  return null;
+}
+
+function extractAfterKeyword(line: string, keyword: string): string {
+  const lower = line.toLowerCase();
+  const idx = lower.indexOf(keyword);
+  if (idx < 0) return '';
+  let rest = line.slice(idx + keyword.length);
+  // buang spasi / titik dua / dash setelah keyword
+  rest = rest.replace(/^[\s:.-]+/, '');
+  return rest.trim();
+}
+
 function parseManualOrderText(from: string, text: string): ManualOrderPayload {
   const lines = text
     .split(/\r?\n/)
     .map((l) => l.trim())
-    .filter(Boolean);
+    .filter((l) => l.length > 0);
 
   let section: 'none' | 'name' | 'address' | 'order' = 'none';
   let name = '';
@@ -40,33 +65,37 @@ function parseManualOrderText(from: string, text: string): ManualOrderPayload {
   const items: ManualOrderItem[] = [];
 
   for (const line of lines) {
-    const lower = line.toLowerCase();
+    const nameKey = matchKeyword(line, NAME_KEYS);
+    const addrKey = matchKeyword(line, ADDRESS_KEYS);
+    const orderKey = matchKeyword(line, ORDER_KEYS);
 
-    if (lower.startsWith('nama:')) {
-      name = line.slice(line.indexOf(':') + 1).trim();
+    if (nameKey) {
+      name = extractAfterKeyword(line, nameKey);
       section = 'name';
       continue;
     }
 
-    if (lower.startsWith('alamat')) {
-      const val =
-        line.indexOf(':') >= 0
-          ? line.slice(line.indexOf(':') + 1).trim()
-          : '';
+    if (addrKey) {
+      const val = extractAfterKeyword(line, addrKey);
       if (val) addressLines.push(val);
       section = 'address';
       continue;
     }
 
-    if (lower.startsWith('order')) {
+    if (orderKey) {
+      const val = extractAfterKeyword(line, orderKey);
+      if (val) items.push({ raw: val });
       section = 'order';
       continue;
     }
 
+    // lanjutan alamat
     if (section === 'address') {
       addressLines.push(line);
-    } else if (section === 'order') {
-      const cleaned = line.replace(/^[-•\s]+/, '');
+    }
+    // lanjutan order
+    else if (section === 'order') {
+      const cleaned = line.replace(/^[-•\s]+/, '').trim();
       if (cleaned) items.push({ raw: cleaned });
     }
   }
@@ -75,7 +104,7 @@ function parseManualOrderText(from: string, text: string): ManualOrderPayload {
     customer_phone: from,
     raw_text: text,
     name: name || undefined,
-    address: addressLines.join(' '),
+    address: addressLines.join(' ').trim() || undefined,
     items,
   };
 }
@@ -202,19 +231,15 @@ async function handleMenuSelection(
       [
         'Oke kak, *order ketik manual* ✍️',
         '',
-        'Kirim dengan format:',
-        'NAMA:',
-        'ALAMAT LENGKAP:',
-        'ORDER:',
-        '- Bayam x2',
-        '- Wortel 500gr',
+        'Kirim dengan format (boleh huruf kecil / besar, boleh typo dikit):',
+        'nama: ... (atau nm / nma)',
+        'alamat: ... (atau almt / almat / alamt / alt)',
+        'order: ... (atau ordr / odr)',
         '',
         'Contoh:',
-        'NAMA: Budi',
-        'ALAMAT: Graha Family, Jl. XYZ No. 10',
-        'ORDER:',
-        '- Bayam x2',
-        '- Brokoli x1',
+        'nm: Budi',
+        'almt graha family blok A2 no 5',
+        'odr: Bayam x2 wortel 1',
       ].join('\n')
     );
   } else if (choice === 'cs') {
@@ -256,19 +281,18 @@ export async function POST(req: NextRequest) {
     const message = value?.messages?.[0];
 
     if (!message) {
-      // Bisa jadi cuma status delivery/read
       return NextResponse.json({ status: 'no-message' }, { status: 200 });
     }
 
     const from = message.from as string;
 
-    // =============== 1) User klik tombol (interactive) =================
+    // 1) Interactive buttons
     if (
       message.type === 'interactive' &&
       message.interactive?.type === 'button_reply'
     ) {
       const reply = message.interactive.button_reply;
-      const id = reply.id as string; // 'order_catalog' | 'order_manual' | 'chat_cs'
+      const id = reply.id as string;
 
       if (id === 'order_catalog') {
         await handleMenuSelection(from, 'catalog');
@@ -281,25 +305,22 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: 'ok-button' }, { status: 200 });
     }
 
-    // =============== 2) User kirim teks biasa ==========================
-
+    // 2) Text messages
     if (message.type === 'text') {
       const text = (message.text?.body || '') as string;
       const lowerFull = text.toLowerCase();
 
-      // Deteksi format NAMA / ALAMAT / ORDER
-      if (
-        lowerFull.includes('nama:') &&
-        lowerFull.includes('alamat') &&
-        lowerFull.includes('order')
-      ) {
-        const parsed = parseManualOrderText(from, text);
+      // Deteksi manual order kalau ada salah satu varian nama + alamat + order
+      const hasName = NAME_KEYS.some((k) => lowerFull.includes(k));
+      const hasAddr = ADDRESS_KEYS.some((k) => lowerFull.includes(k));
+      const hasOrder = ORDER_KEYS.some((k) => lowerFull.includes(k));
 
+      if (hasName && hasAddr && hasOrder) {
+        const parsed = parseManualOrderText(from, text);
         console.log(
           '[PakSayur] Manual order candidate:',
           JSON.stringify(parsed, null, 2)
         );
-
         await sendWhatsAppText(from, formatManualOrderConfirmation(parsed));
         return NextResponse.json(
           { status: 'ok-manual-order' },
@@ -309,13 +330,11 @@ export async function POST(req: NextRequest) {
 
       const t = text.toLowerCase().trim();
 
-      // Keyword untuk memanggil menu
       if (t === 'menu' || t === 'start' || t === 'halo') {
         await sendWhatsAppMenuButtons(from);
         return NextResponse.json({ status: 'ok-menu' }, { status: 200 });
       }
 
-      // Backup: kalau user balas angka 1/2/3 instead of klik tombol
       if (t === '1') {
         await handleMenuSelection(from, 'catalog');
         return NextResponse.json({ status: 'ok-1' }, { status: 200 });
@@ -329,7 +348,6 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ status: 'ok-3' }, { status: 200 });
       }
 
-      // Fallback: apa pun yang dia ketik → kirim menu tombol
       await sendWhatsAppMenuButtons(from);
       return NextResponse.json(
         { status: 'ok-fallback-text' },
@@ -337,12 +355,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // =============== 3) Tipe pesan lain (gambar, audio, dll) ===========
+    // 3) Tipe pesan lain (gambar, audio, dll) → kirim menu
     await sendWhatsAppMenuButtons(from);
     return NextResponse.json({ status: 'ok-other-type' }, { status: 200 });
   } catch (err) {
     console.error('[WhatsApp] Webhook error', err);
-    // Tetap balas 200 supaya WA nggak retry terus
     return NextResponse.json({ status: 'error-but-ack' }, { status: 200 });
   }
 }
