@@ -33,6 +33,16 @@ type ManualOrderPayload = {
   items: ManualOrderItem[];
 };
 
+// Payload yang nanti dikirim ke backend / Ryo
+type OrderDraftPayload = {
+  source_channel: 'whatsapp';
+  wa_phone: string;
+  customer_name?: string;
+  address_text?: string;
+  manual_raw_text: string;
+  items_raw: string[];
+};
+
 function matchKeyword(line: string, keywords: string[]): string | null {
   const lower = line.toLowerCase().trimStart();
   for (const k of keywords) {
@@ -103,6 +113,17 @@ function parseManualOrderText(from: string, text: string): ManualOrderPayload {
     name: name || undefined,
     address: addressLines.join(' ').trim() || undefined,
     items,
+  };
+}
+
+function buildOrderDraft(parsed: ManualOrderPayload): OrderDraftPayload {
+  return {
+    source_channel: 'whatsapp',
+    wa_phone: parsed.customer_phone,
+    customer_name: parsed.name,
+    address_text: parsed.address,
+    manual_raw_text: parsed.raw_text,
+    items_raw: parsed.items.map((i) => i.raw),
   };
 }
 
@@ -223,7 +244,6 @@ async function handleMenuSelection(
       ].join('\n')
     );
   } else if (choice === 'manual') {
-    // ⚠️ Pesan rapi, TANPA contoh typo
     await sendWhatsAppText(
       from,
       [
@@ -319,10 +339,16 @@ export async function POST(req: NextRequest) {
 
       if (hasName && hasAddr && hasOrder) {
         const parsed = parseManualOrderText(from, text);
+        const draft = buildOrderDraft(parsed);
+
         console.log(
-          '[PakSayur] Manual order candidate:',
-          JSON.stringify(parsed, null, 2)
+          '[PakSayur] OrderDraftPayload:',
+          JSON.stringify(draft, null, 2)
         );
+
+        // Nanti di sini tinggal tambahin fetch ke backend Ryo
+        // await fetch(BACKEND_URL + '/api/orders/from-whatsapp-manual', { ... })
+
         await sendWhatsAppText(from, formatManualOrderConfirmation(parsed));
         return NextResponse.json(
           { status: 'ok-manual-order' },
