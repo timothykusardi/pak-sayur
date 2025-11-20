@@ -169,6 +169,7 @@ type TestOrderPayload = {
   waPhone: string; // 6281xxxx
   waName?: string;
   originalText?: string;
+  qty?: number; // qty dinamis, default 2
 };
 
 async function createTestOrderInSupabase(payload: TestOrderPayload) {
@@ -221,7 +222,7 @@ async function createTestOrderInSupabase(payload: TestOrderPayload) {
     throw new Error('Product PS-BAYAM not found: ' + prodErr?.message);
   }
 
-  const qty = 2; // karena TEST BAYAM 2
+  const qty = payload.qty && payload.qty > 0 ? payload.qty : 2;
   const unitPrice = product.price as number;
   const lineTotal = qty * unitPrice;
   const subtotal = lineTotal;
@@ -484,13 +485,21 @@ export async function POST(req: NextRequest) {
         normalized,
       });
 
-      // ==== BRANCH: TEST BAYAM 2 ====
-      if (normalized === 'test bayam 2' || normalized === 'tes bayam 2') {
+      // ==== BRANCH: TEST BAYAM N ====
+      const testMatch = normalized.match(/^(tes|test) bayam(?:\s+(\d+))?$/);
+
+      if (testMatch) {
+        const qty =
+          testMatch[2] && !Number.isNaN(Number(testMatch[2]))
+            ? Number(testMatch[2])
+            : 2;
+
         try {
           const result = await createTestOrderInSupabase({
             waPhone: from,
             waName: contactName,
             originalText: trimmed,
+            qty,
           });
 
           await sendWhatsAppText(
@@ -538,6 +547,7 @@ export async function POST(req: NextRequest) {
           JSON.stringify(draft, null, 2),
         );
 
+        // di tahap ini masih cuma kirim ringkasan, belum tulis ke DB
         await sendWhatsAppText(from, formatManualOrderConfirmation(parsed));
         return NextResponse.json(
           { status: 'ok-manual-order' },
@@ -566,6 +576,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ status: 'ok-3' }, { status: 200 });
       }
 
+      // fallback text → kirim menu lagi
       await sendWhatsAppMenuButtons(from);
       return NextResponse.json(
         { status: 'ok-fallback-text' },
