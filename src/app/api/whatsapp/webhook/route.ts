@@ -485,10 +485,7 @@ export async function POST(req: NextRequest) {
       });
 
       // ==== BRANCH: TEST BAYAM 2 ====
-      if (
-        normalized === 'test bayam 2' ||
-        normalized === 'tes bayam 2' // kalau kamu ngetik "tes bayam 2"
-      ) {
+      if (normalized === 'test bayam 2' || normalized === 'tes bayam 2') {
         try {
           const result = await createTestOrderInSupabase({
             waPhone: from,
@@ -541,7 +538,6 @@ export async function POST(req: NextRequest) {
           JSON.stringify(draft, null, 2),
         );
 
-        // nanti di sini baru sambung ke backend parser beneran
         await sendWhatsAppText(from, formatManualOrderConfirmation(parsed));
         return NextResponse.json(
           { status: 'ok-manual-order' },
@@ -570,10 +566,18 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ status: 'ok-3' }, { status: 200 });
       }
 
-      // fallback text → kirim menu
       await sendWhatsAppMenuButtons(from);
       return NextResponse.json(
         { status: 'ok-fallback-text' },
         { status: 200 },
       );
     }
+
+    // 3) Tipe pesan lain (gambar, audio, dll) → kirim menu
+    await sendWhatsAppMenuButtons(from);
+    return NextResponse.json({ status: 'ok-other-type' }, { status: 200 });
+  } catch (err) {
+    console.error('[WhatsApp] Webhook error', err);
+    return NextResponse.json({ status: 'error-but-ack' }, { status: 200 });
+  }
+}
