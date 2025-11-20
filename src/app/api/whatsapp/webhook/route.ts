@@ -476,9 +476,19 @@ export async function POST(req: NextRequest) {
     if (message.type === 'text') {
       const text = (message.text?.body || '') as string;
       const trimmed = text.trim();
+      const normalized = trimmed.toLowerCase().replace(/\s+/g, ' ');
+
+      console.log('[DEBUG] incoming text', {
+        text,
+        trimmed,
+        normalized,
+      });
 
       // ==== BRANCH: TEST BAYAM 2 ====
-      if (trimmed.toUpperCase() === 'TEST BAYAM 2') {
+      if (
+        normalized === 'test bayam 2' ||
+        normalized === 'tes bayam 2' // kalau kamu ngetik "tes bayam 2"
+      ) {
         try {
           const result = await createTestOrderInSupabase({
             waPhone: from,
@@ -567,12 +577,3 @@ export async function POST(req: NextRequest) {
         { status: 200 },
       );
     }
-
-    // 3) Tipe pesan lain (gambar, audio, dll) → kirim menu
-    await sendWhatsAppMenuButtons(from);
-    return NextResponse.json({ status: 'ok-other-type' }, { status: 200 });
-  } catch (err) {
-    console.error('[WhatsApp] Webhook error', err);
-    return NextResponse.json({ status: 'error-but-ack' }, { status: 200 });
-  }
-}
