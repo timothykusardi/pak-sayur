@@ -1,4 +1,3 @@
-// src/app/layout.tsx
 import type { Metadata } from "next";
 import { Cormorant_Garamond, Inter } from "next/font/google";
 import "./globals.css";
@@ -15,7 +14,7 @@ const sans = Inter({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://paksayur.com"), // ganti kalau domain beda
+  metadataBase: new URL("https://paksayur.com"),
   title: {
     default: "Pak Sayur – Sayur Segar Keliling Surabaya",
     template: "%s · Pak Sayur",
@@ -25,11 +24,19 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Pak Sayur – Sayur Segar Keliling Surabaya",
     description:
-      "Layanan sayur dan daging segar keliling ke Graha Family, Royal Residence, Pakuwon City, dan perumahan lain di Surabaya. Pre-order via WhatsApp, antar pagi hari.",
+      "Layanan sayur dan daging segar keliling ke Graha Family, Royal Residence, Pakuwon City, dan perumahan lain di Surabaya.",
     url: "/",
     siteName: "Pak Sayur",
     locale: "id_ID",
     type: "website",
+  },
+  // ⬇️ bagian penting untuk favicon
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/icon.png", type: "image/png" },
+    ],
+    shortcut: "/favicon.ico",
   },
 };
 
