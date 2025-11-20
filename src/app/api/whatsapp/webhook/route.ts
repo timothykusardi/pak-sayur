@@ -184,7 +184,7 @@ function formatManualOrderConfirmation(order: ManualOrderPayload): string {
     'Order:',
     itemsText,
     '',
-    'Kalau sudah benar, balas: *OK* ya kak 🙏',
+    'Kalau sudah benar, balas: *OK COD* (bayar di tempat) atau *OK TF* (transfer) ya kak 🙏',
     'Kalau mau revisi, silakan kirim ulang format NAMA / ALAMAT / ORDER.',
   ].join('\n');
 }
@@ -244,6 +244,67 @@ function parseItemLine(raw: string): ParsedItem | null {
     aliasText,
     qty,
   };
+}
+
+/* ===== Helper: ZONE DETECTION & DELIVERY FEE ===== */
+
+type ZoneRule = {
+  code: string; // harus sama dengan zones.code di DB
+  keywords: string[];
+  deliveryFee: number;
+};
+
+// SESUAIKAN kode & ongkir dengan isi tabel `zones` kamu
+const ZONE_RULES: ZoneRule[] = [
+  {
+    code: 'GRAHA_FAMILI',
+    keywords: ['graha famili', 'graha family'],
+    deliveryFee: 5000,
+  },
+  {
+    code: 'ROYAL_RESIDENCE',
+    keywords: ['royal residence', 'royal residen'],
+    deliveryFee: 7000,
+  },
+  {
+    code: 'DIAN_ISTANA',
+    keywords: ['dian istana'],
+    deliveryFee: 7000,
+  },
+  {
+    code: 'WISATA_BUKIT_MAS',
+    keywords: ['wisata bukit mas', 'wbm'],
+    deliveryFee: 8000,
+  },
+  {
+    code: 'VILLA_BUKIT_MAS',
+    keywords: ['villa bukit mas', 'vbm'],
+    deliveryFee: 8000,
+  },
+  {
+    code: 'GRAHA_NATURA',
+    keywords: ['graha natura'],
+    deliveryFee: 8000,
+  },
+  {
+    code: 'VILLA_BUKIT_REGENCY',
+    keywords: ['villa bukit regency', 'vbr'],
+    deliveryFee: 8000,
+  },
+];
+
+function detectZoneFromAddress(
+  address: string | undefined,
+): ZoneRule | null {
+  if (!address) return null;
+  const lower = address.toLowerCase();
+
+  for (const rule of ZONE_RULES) {
+    if (rule.keywords.some((kw) => lower.includes(kw))) {
+      return rule;
+    }
+  }
+  return null;
 }
 
 /* ===== Helper: resolve items ke product_aliases + products ===== */
@@ -361,10 +422,13 @@ async function resolveManualOrder(
 
 /* ====== CREATE ORDER BENERAN DARI MANUAL (multi-item) ====== */
 
+type PaymentMethod = 'COD' | 'TRANSFER';
+
 async function createOrderFromResolvedManual(
   waPhone: string,
   waName: string | undefined,
   state: ManualOrderState,
+  paymentMethod: PaymentMethod,
 ) {
   const { parsed, resolvedItems } = state;
 
@@ -408,13 +472,39 @@ async function createOrderFromResolvedManual(
     }
   }
 
-  // 2) Hitung total
+  // 2) Deteksi zona & ongkir
+  const zoneRule = detectZoneFromAddress(parsed.address);
+  let zoneId: number | null = null;
+  let deliveryFee = 0;
+
+  if (zoneRule) {
+    const { data: zoneRow, error: zoneErr } = await supabase
+      .from('zones')
+      .select('id, code')
+      .eq('code', zoneRule.code)
+      .maybeSingle();
+
+    if (zoneErr) {
+      console.error('[Supabase] error reading zones', zoneErr);
+    }
+
+    if (zoneRow?.id) {
+      zoneId = zoneRow.id;
+      deliveryFee = zoneRule.deliveryFee;
+    } else {
+      console.warn(
+        '[Zones] Zone code detected from address but not found in DB:',
+        zoneRule.code,
+      );
+    }
+  }
+
+  // 3) Hitung total
   const subtotal = resolvedItems.reduce((sum, item) => sum + item.lineTotal, 0);
-  const deliveryFee = 0; // TODO: nanti isi pakai logic zone
   const discountTotal = 0;
   const grandTotal = subtotal + deliveryFee - discountTotal;
 
-  // 3) Insert ke orders
+  // 4) Insert ke orders
   const { data: orderRow, error: orderErr } = await supabase
     .from('orders')
     .insert({
@@ -422,12 +512,12 @@ async function createOrderFromResolvedManual(
       status: 'PENDING', // setelah OK, kita anggap PENDING/CONFIRMED
       source_channel: 'whatsapp',
       address_text: parsed.address ?? '(alamat belum lengkap)',
-      zone_id: null, // TODO: nanti diisi setelah ada logic zones
+      zone_id: zoneId,
       subtotal,
       delivery_fee: deliveryFee,
       discount_total: discountTotal,
       grand_total: grandTotal,
-      payment_method: 'COD', // sementara default COD
+      payment_method: paymentMethod, // 'COD' | 'TRANSFER'
     })
     .select('id')
     .single();
@@ -438,7 +528,7 @@ async function createOrderFromResolvedManual(
 
   const orderId = orderRow.id;
 
-  // 4) Insert banyak order_items sekaligus
+  // 5) Insert banyak order_items sekaligus
   const itemsPayload = resolvedItems.map((item) => ({
     order_id: orderId,
     product_id: item.productId,
@@ -455,10 +545,10 @@ async function createOrderFromResolvedManual(
     throw new Error('Failed to insert order_items: ' + itemsErr.message);
   }
 
-  // 5) Insert payments
+  // 6) Insert payments
   const { error: payErr } = await supabase.from('payments').insert({
     order_id: orderId,
-    method: 'COD',
+    method: paymentMethod,
     status: 'PENDING',
     amount: grandTotal,
   });
@@ -472,6 +562,9 @@ async function createOrderFromResolvedManual(
     subtotal,
     grandTotal,
     items: resolvedItems,
+    deliveryFee,
+    paymentMethod,
+    zoneCode: zoneRule?.code ?? null,
   };
 }
 
@@ -593,6 +686,8 @@ async function handleMenuSelection(
         'ORDER:',
         '- Bayam 2 ikat',
         '- Brokoli 1',
+        '',
+        'Setelah kami kirim ringkasan, kakak bisa pilih cara bayar: *OK COD* atau *OK TF* 🙏',
       ].join('\n'),
     );
   } else if (choice === 'cs') {
@@ -719,9 +814,9 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      /* ----- BRANCH: USER BALAS "OK" SETELAH RINGKASAN ----- */
+      /* ----- BRANCH: USER BALAS "OK" / "OK COD" / "OK TF" ----- */
 
-      if (normalized === 'ok' || normalized === 'ok kak') {
+      if (normalized.startsWith('ok')) {
         const state = lastManualOrders[from];
 
         if (!state || !state.resolvedItems || state.resolvedItems.length === 0) {
@@ -735,11 +830,22 @@ export async function POST(req: NextRequest) {
           );
         }
 
+        // default COD, kalau ada "tf" / "transfer" / "trf" di teks → TRANSFER
+        let paymentMethod: PaymentMethod = 'COD';
+        if (
+          normalized.includes('tf') ||
+          normalized.includes('transfer') ||
+          normalized.includes('trf')
+        ) {
+          paymentMethod = 'TRANSFER';
+        }
+
         try {
           const result = await createOrderFromResolvedManual(
             from,
             contactName,
             state,
+            paymentMethod,
           );
 
           const itemsText = result.items
@@ -751,6 +857,20 @@ export async function POST(req: NextRequest) {
             )
             .join('\n');
 
+          const payText =
+            paymentMethod === 'COD'
+              ? 'Metode bayar: COD (bayar di tempat)'
+              : 'Metode bayar: Transfer';
+
+          const zoneText = result.zoneCode
+            ? `Zona pengiriman: ${result.zoneCode}\n`
+            : '';
+
+          const ongkirText =
+            result.deliveryFee > 0
+              ? `Ongkir : Rp ${result.deliveryFee.toLocaleString('id-ID')}\n`
+              : '';
+
           await sendWhatsAppText(
             from,
             [
@@ -761,6 +881,8 @@ export async function POST(req: NextRequest) {
               'Item:',
               itemsText,
               '',
+              zoneText + ongkirText + payText,
+              '',
               `Total : Rp ${result.grandTotal.toLocaleString('id-ID')}`,
               '',
               'Terima kasih kak 🙏',
@@ -768,7 +890,11 @@ export async function POST(req: NextRequest) {
           );
 
           return NextResponse.json(
-            { status: 'ok-order-from-ok', orderId: result.orderId },
+            {
+              status: 'ok-order-from-ok',
+              orderId: result.orderId,
+              paymentMethod,
+            },
             { status: 200 },
           );
         } catch (e) {
