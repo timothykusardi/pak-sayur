@@ -294,14 +294,18 @@ type ZoneDetectResult = {
   deliveryFeeDb: number | null; // null = free (no fee set)
 };
 
-/**
- * Deteksi zona:
- * 1) Cek semua row di tabel zones:
- *    - match full name (zones.name) di alamat
- *    - match code yang diubah jadi kata (PURI_GALAXY -> "puri galaxy")
- *    - kalau belum kena, cek token nama (margorejo, galax, dll) di alamat
- * 2) Kalau tetap nggak ketemu → fallback ke ZONE_RULES (alias / singkatan).
- */
+const GENERIC_TOKENS = new Set([
+  'area',
+  'residence',
+  'residences',
+  'city',
+  'regency',
+  'perumahan',
+  'cluster',
+  'other',
+  'unknown',
+]);
+
 async function detectZoneInfo(
   address: string | undefined,
 ): Promise<ZoneDetectResult> {
@@ -310,26 +314,28 @@ async function detectZoneInfo(
   }
 
   const lowerAddr = address.toLowerCase();
+  let bestMatch:
+    | (ZoneDetectResult & { score: number; debugFrom: string })
+    | null = null;
 
-  // Step 1: scan semua zones di DB
   try {
     const { data: zones, error } = await supabase
       .from('zones')
-      .select('id, code, name, delivery_fee');
+      .select('id, code, name, area_group, delivery_fee');
 
     if (error) {
       console.error('[Supabase] error reading zones for detectZoneInfo', error);
     } else if (zones && Array.isArray(zones)) {
-      let bestMatch:
-        | (ZoneDetectResult & { score: number })
-        | null = null;
-
       for (const z of zones as any[]) {
         const id: number | null = z.id ?? null;
         const code: string | null = z.code ?? null;
-        const name: string | null = z.name ?? null;
 
-        const nameLower = name ? String(name).toLowerCase().trim() : '';
+        const nameLower = z.name
+          ? String(z.name).toLowerCase().trim()
+          : '';
+        const agLower = z.area_group
+          ? String(z.area_group).toLowerCase().trim()
+          : '';
         const codeLower = code ? String(code).toLowerCase().trim() : '';
         const codeWords = codeLower.replace(/_/g, ' ');
 
@@ -338,66 +344,87 @@ async function detectZoneInfo(
             ? z.delivery_fee
             : null;
 
-        // kandidat full-string untuk match langsung
+        // === 1) FULL STRING MATCH (paling kuat) ===
         const fullCandidates = new Set<string>();
         if (nameLower) fullCandidates.add(nameLower);
-        if (codeWords && codeWords !== nameLower) fullCandidates.add(codeWords);
+        if (agLower) fullCandidates.add(agLower);
+        if (codeWords) fullCandidates.add(codeWords);
 
-        // 1A: full-string match (paling kuat, skor +100)
         for (const cand of fullCandidates) {
           if (!cand) continue;
           if (lowerAddr.includes(cand)) {
-            const score = cand.length + 100; // full match lebih kuat
+            const score = cand.length + 200; // full match, skor tinggi
             if (!bestMatch || score > bestMatch.score) {
               bestMatch = {
                 zoneId: id,
                 zoneCode: code,
                 deliveryFeeDb: deliveryFeeValue,
                 score,
+                debugFrom: `full:${cand}`,
               };
             }
           }
         }
 
-        // 1B: token match (contoh: "margorejo cluster diamond" → match token "margorejo" dari "Margorejo Indah")
-        const tokenSource = nameLower || codeWords;
+        // === 2) TOKEN MATCH (per kata) ===
+        const tokenSource = [nameLower, agLower, codeWords]
+          .filter(Boolean)
+          .join(' ');
         if (tokenSource) {
           const tokens = tokenSource
             .split(/\s+/)
             .map((t: string) => t.trim())
-            .filter((t: string) => t.length >= 4); // hindari "di", "rt"
+            .filter(
+              (t: string) =>
+                t.length >= 4 && !GENERIC_TOKENS.has(t), // buang kata generik "area", "city", dll
+            );
 
           for (const tok of tokens) {
             if (lowerAddr.includes(tok)) {
-              const score = tok.length; // lebih rendah dari full match
+              const score = tok.length; // lebih lemah daripada full match
               if (!bestMatch || score > bestMatch.score) {
                 bestMatch = {
                   zoneId: id,
                   zoneCode: code,
                   deliveryFeeDb: deliveryFeeValue,
                   score,
+                  debugFrom: `token:${tok}`,
                 };
               }
             }
           }
         }
       }
-
-      if (bestMatch) {
-        return {
-          zoneId: bestMatch.zoneId,
-          zoneCode: bestMatch.zoneCode,
-          deliveryFeeDb: bestMatch.deliveryFeeDb,
-        };
-      }
     }
   } catch (e) {
     console.error('[detectZoneInfo] error reading zones', e);
   }
 
-  // Step 2: fallback ke ZONE_RULES (alias / singkatan)
+  // Log supaya kamu bisa lihat di Vercel
+  console.log('[ZONE_DEBUG]', {
+    address: lowerAddr,
+    match: bestMatch
+      ? {
+          zoneId: bestMatch.zoneId,
+          zoneCode: bestMatch.zoneCode,
+          from: bestMatch.debugFrom,
+          score: bestMatch.score,
+        }
+      : null,
+  });
+
+  if (bestMatch) {
+    return {
+      zoneId: bestMatch.zoneId,
+      zoneCode: bestMatch.zoneCode,
+      deliveryFeeDb: bestMatch.deliveryFeeDb,
+    };
+  }
+
+  // fallback: pakai ZONE_RULES (alias manual: graha famili, royal res, dll) seperti sebelumnya
+  const lower = lowerAddr;
   for (const rule of ZONE_RULES) {
-    if (rule.keywords.some((kw) => lowerAddr.includes(kw))) {
+    if (rule.keywords.some((kw) => lower.includes(kw))) {
       try {
         const { data: zr, error: zoneErr } = await supabase
           .from('zones')
@@ -415,13 +442,21 @@ async function detectZoneInfo(
             !Number.isNaN(zr.delivery_fee)
               ? zr.delivery_fee
               : null;
+          console.log('[ZONE_DEBUG_FALLBACK_RULE]', {
+            address: lowerAddr,
+            rule: rule.code,
+            zoneId: zr.id,
+          });
           return {
             zoneId: zr.id,
             zoneCode: zr.code ?? rule.code,
             deliveryFeeDb: dlv,
           };
         } else {
-          // DB belum ada row, tapi kita tahu kodenya dari rule
+          console.log('[ZONE_DEBUG_FALLBACK_RULE_NO_DB]', {
+            address: lowerAddr,
+            rule: rule.code,
+          });
           return {
             zoneId: null,
             zoneCode: rule.code,
@@ -434,6 +469,7 @@ async function detectZoneInfo(
     }
   }
 
+  console.log('[ZONE_DEBUG_NO_MATCH]', { address: lowerAddr });
   return { zoneId: null, zoneCode: null, deliveryFeeDb: null };
 }
 
