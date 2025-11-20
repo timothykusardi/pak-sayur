@@ -823,17 +823,30 @@ export async function POST(req: NextRequest) {
       /* ----- BRANCH: USER KONFIRMASI (OK / COD / TF / TRANSFER) ----- */
 
       const hasDraft = !!lastManualOrders[from];
-      const hasConfirmKeyword =
-        normalized.includes('ok') ||
-        normalized.startsWith('cod') ||
-        normalized.includes(' cod') ||
-        normalized === 'cod' ||
-        normalized.startsWith('tf') ||
-        normalized.includes(' tf') ||
-        normalized === 'tf' ||
-        normalized.includes('transfer') ||
-        normalized.includes('trf') ||
-        normalized.includes('transf');
+
+      // words-based detection supaya "cod", "ok cod", "tf", "ok transfer", "trnsfr", dll tetap kebaca
+      const words = normalized
+        .split(' ')
+        .map((w) => w.trim())
+        .filter((w) => w.length > 0);
+
+      const isCodWord = (w: string) =>
+        w === 'cod' || w === 'c0d' || w === 'k0d' || w === 'kod';
+
+      const isTransferWord = (w: string) =>
+        w === 'tf' ||
+        w === 'trf' ||
+        w === 'tfr' ||
+        w === 'transfer' ||
+        w === 'transf' ||
+        w === 'trnsfr' ||
+        w === 'trnsfer';
+
+      const hasCodWord = words.some(isCodWord);
+      const hasTransferWord = words.some(isTransferWord);
+      const hasOkWord = words.includes('ok');
+
+      const hasConfirmKeyword = hasCodWord || hasTransferWord || hasOkWord;
 
       if (hasDraft && hasConfirmKeyword) {
         const state = lastManualOrders[from];
@@ -849,18 +862,12 @@ export async function POST(req: NextRequest) {
           );
         }
 
-        // Default COD, kalau ada keyword tf/transfer → TRANSFER
-        let paymentMethod: PaymentMethod = 'COD';
-        if (
-          normalized.includes('tf') ||
-          normalized.includes('transfer') ||
-          normalized.includes('trf') ||
-          normalized.includes('transf')
-        ) {
+        // Default COD, kalau ada keyword transfer → TRANSFER
+        let paymentMethod: PaymentMethod;
+        if (hasTransferWord) {
           paymentMethod = 'TRANSFER';
-        } else if (normalized.includes('cod')) {
-          paymentMethod = 'COD';
         } else {
+          // cuma "ok" atau "cod" → COD
           paymentMethod = 'COD';
         }
 
