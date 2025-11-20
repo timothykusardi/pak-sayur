@@ -485,7 +485,8 @@ export async function POST(req: NextRequest) {
         normalized,
       });
 
-      // ==== BRANCH: TEST BAYAM N ====
+      /* ----- BRANCH: TEST BAYAM N (langsung buat order TEST) ----- */
+
       const testMatch = normalized.match(/^(tes|test) bayam(?:\s+(\d+))?$/);
 
       if (testMatch) {
@@ -532,7 +533,8 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // ==== BRANCH: ORDER MANUAL (format NAMA / ALAMAT / ORDER) ====
+      /* ----- BRANCH: ORDER MANUAL (NAMA / ALAMAT / ORDER) ----- */
+
       const lowerFull = text.toLowerCase();
       const hasName = NAME_KEYS.some((k) => lowerFull.includes(k));
       const hasAddr = ADDRESS_KEYS.some((k) => lowerFull.includes(k));
@@ -547,7 +549,7 @@ export async function POST(req: NextRequest) {
           JSON.stringify(draft, null, 2),
         );
 
-        // di tahap ini masih cuma kirim ringkasan, belum tulis ke DB
+        // Sekarang hanya kirim ringkasan + instruksi OK
         await sendWhatsAppText(from, formatManualOrderConfirmation(parsed));
         return NextResponse.json(
           { status: 'ok-manual-order' },
@@ -555,10 +557,53 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // ==== BRANCH: keyword menu / angka 1-3 ====
+      /* ----- BRANCH: USER BALAS "OK" SETELAH RINGKASAN ----- */
+
+      if (normalized === 'ok' || normalized === 'ok kak') {
+        // Versi TEST: setiap "OK" → buat 1 order TEST PS-BAYAM x2
+        try {
+          const result = await createTestOrderInSupabase({
+            waPhone: from,
+            waName: contactName,
+            originalText: trimmed,
+            qty: 2, // sementara fix 2; nanti bisa dihubungkan ke parser item
+          });
+
+          await sendWhatsAppText(
+            from,
+            [
+              '✅ Order TEST berhasil dibuat di sistem.',
+              '',
+              `ID Order : ${result.orderId}`,
+              `Item     : ${result.productName} x ${result.qty}`,
+              `Total    : Rp ${result.grandTotal.toLocaleString('id-ID')}`,
+              '',
+              'Ini hanya order TEST, tidak akan dikirim ya kak 🙏',
+            ].join('\n'),
+          );
+
+          return NextResponse.json(
+            { status: 'ok-test-order-from-ok' },
+            { status: 200 },
+          );
+        } catch (e) {
+          console.error('[TEST_ORDER_OK] Error', e);
+          await sendWhatsAppText(
+            from,
+            'Maaf kak, terjadi error saat membuat order TEST dari balasan OK. Nanti admin cek dulu ya 🙏',
+          );
+          return NextResponse.json(
+            { status: 'error-test-order-from-ok' },
+            { status: 200 },
+          );
+        }
+      }
+
+      /* ----- BRANCH: keyword menu / angka 1-3 ----- */
+
       const t = trimmed.toLowerCase();
 
-      if (t === 'menu' || t === 'start' || t === 'halo') {
+      if (t === 'menu' || t === 'start' || t === 'halo' || t === 'helo') {
         await sendWhatsAppMenuButtons(from);
         return NextResponse.json({ status: 'ok-menu' }, { status: 200 });
       }
