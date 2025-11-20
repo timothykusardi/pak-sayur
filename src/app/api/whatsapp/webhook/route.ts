@@ -43,8 +43,29 @@ type ManualOrderPayload = {
   items: ManualOrderItem[];
 };
 
-// map: nomor WA (628xx) -> draft manual terakhir
-const lastManualOrders: Record<string, ManualOrderPayload> = {};
+type ParsedItem = {
+  raw: string;
+  aliasText: string;
+  qty: number;
+};
+
+type ResolvedItem = {
+  raw: string;
+  aliasText: string;
+  productId: number;
+  productName: string;
+  unitPrice: number;
+  qty: number;
+  lineTotal: number;
+};
+
+type ManualOrderState = {
+  parsed: ManualOrderPayload;
+  resolvedItems: ResolvedItem[];
+};
+
+// map: nomor WA (628xx) -> draft manual terakhir (parsed + resolved)
+const lastManualOrders: Record<string, ManualOrderState> = {};
 
 /* ===================== Parser Manual Order ===================== */
 
@@ -53,7 +74,7 @@ const NAME_KEYS = ['nama', 'nm', 'nma'];
 const ADDRESS_KEYS = ['alamat', 'almt', 'almat', 'alamt', 'alt', 'alm'];
 const ORDER_KEYS = ['order', 'ordr', 'odr', 'oder'];
 
-// Payload yang nanti dikirim ke backend / Ryo
+// Payload yang nanti bisa dikirim ke backend lain (kalau mau)
 type OrderDraftPayload = {
   source_channel: 'whatsapp';
   wa_phone: string;
@@ -168,27 +189,177 @@ function formatManualOrderConfirmation(order: ManualOrderPayload): string {
   ].join('\n');
 }
 
-/* ===== Helper: ambil qty bayam dari item manual (bayam 2, bayam x3, dst) ===== */
+/* ===== Helper: parsing 1 baris item → aliasText + qty ===== */
 
-function extractBayamQtyFromItems(items: ManualOrderItem[]): number | null {
-  for (const item of items) {
-    const lower = item.raw.toLowerCase();
-    if (!lower.includes('bayam')) continue;
+const UNIT_WORDS = [
+  'x',
+  'pcs',
+  'pc',
+  'ikat',
+  'kg',
+  'gr',
+  'g',
+  'ons',
+  'buah',
+  'btg',
+  'batang',
+  'bks',
+  'bungkus',
+  'pack',
+  'pak',
+  'sachet',
+];
 
-    // Cari angka pertama di string, misal:
-    // "bayam 2", "bayam x2", "2 bayam", "bayam 10 ikat"
-    const match = lower.match(/(\d+(?:[.,]\d+)?)/);
-    if (match) {
-      const n = Number(match[1].replace(',', '.'));
-      if (!Number.isNaN(n) && n > 0) {
-        return n;
-      }
+function parseItemLine(raw: string): ParsedItem | null {
+  const lower = raw.toLowerCase();
+
+  // cari angka pertama di string (bisa 2, 2.5, 2,5)
+  const numMatch = lower.match(/(\d+(?:[.,]\d+)?)/);
+  let qty = 1;
+
+  if (numMatch) {
+    qty = Number(numMatch[1].replace(',', '.'));
+    if (Number.isNaN(qty) || qty <= 0) {
+      return null;
     }
   }
-  return null;
+
+  // buang angka & unit word untuk dapat aliasText kira-kira
+  const tokens = lower.split(/\s+/).filter((tok) => {
+    const cleaned = tok.replace(/[.,]/g, '');
+    if (!cleaned) return false;
+    if (!Number.isNaN(Number(cleaned))) return false; // angka
+    if (UNIT_WORDS.includes(cleaned)) return false;
+    return true;
+  });
+
+  if (tokens.length === 0) {
+    return null;
+  }
+
+  const aliasText = tokens.join(' ').trim(); // contoh: "bayam", "sayur bayam"
+
+  return {
+    raw,
+    aliasText,
+    qty,
+  };
 }
 
-/* ====================== TEST ORDER (SUPABASE) ======================== */
+/* ===== Helper: resolve items ke product_aliases + products ===== */
+
+type ResolveResult =
+  | {
+      ok: true;
+      state: ManualOrderState;
+    }
+  | {
+      ok: false;
+      errors: string[];
+    };
+
+async function resolveManualOrder(
+  parsed: ManualOrderPayload,
+): Promise<ResolveResult> {
+  if (parsed.items.length === 0) {
+    return { ok: false, errors: ['Belum ada item di bagian ORDER.'] };
+  }
+
+  const parsedItems: ParsedItem[] = [];
+  const errors: string[] = [];
+
+  for (const item of parsed.items) {
+    const p = parseItemLine(item.raw);
+    if (!p) {
+      errors.push(`Item tidak terbaca: "${item.raw}"`);
+      continue;
+    }
+    parsedItems.push(p);
+  }
+
+  if (parsedItems.length === 0) {
+    errors.push('Tidak ada item valid di ORDER.');
+    return { ok: false, errors };
+  }
+
+  const uniqueAliases = Array.from(
+    new Set(parsedItems.map((i) => i.aliasText.trim().toLowerCase())),
+  );
+
+  const { data: aliasRows, error: aliasErr } = await supabase
+    .from('product_aliases')
+    .select('alias, product_id, products(id, name, price)')
+    .in('alias', uniqueAliases);
+
+  if (aliasErr) {
+    console.error('[Supabase] error reading product_aliases', aliasErr);
+    throw aliasErr;
+  }
+
+  const aliasMap = new Map<
+    string,
+    { product_id: number; product_name: string; price: number }
+  >();
+
+  (aliasRows ?? []).forEach((row: any) => {
+    const key = String(row.alias).toLowerCase();
+    const prod = row.products;
+    if (!prod) return;
+    aliasMap.set(key, {
+      product_id: prod.id,
+      product_name: prod.name,
+      price: prod.price,
+    });
+  });
+
+  const resolvedItems: ResolvedItem[] = [];
+
+  for (const item of parsedItems) {
+    const key = item.aliasText.toLowerCase();
+
+    const aliasInfo = aliasMap.get(key);
+    if (!aliasInfo) {
+      errors.push(
+        `Item "${item.raw}" tidak ditemukan di daftar product_aliases (alias: "${item.aliasText}").`,
+      );
+      continue;
+    }
+
+    const lineTotal = item.qty * aliasInfo.price;
+
+    resolvedItems.push({
+      raw: item.raw,
+      aliasText: item.aliasText,
+      productId: aliasInfo.product_id,
+      productName: aliasInfo.product_name,
+      unitPrice: aliasInfo.price,
+      qty: item.qty,
+      lineTotal,
+    });
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+
+  if (resolvedItems.length === 0) {
+    return {
+      ok: false,
+      errors: [
+        'Semua item gagal di-resolve. Cek lagi penulisan nama sayur dan jumlahnya ya kak 🙏',
+      ],
+    };
+  }
+
+  const state: ManualOrderState = {
+    parsed,
+    resolvedItems,
+  };
+
+  return { ok: true, state };
+}
+
+/* ====================== TEST ORDER (PS-BAYAM) ======================== */
 
 type TestOrderPayload = {
   waPhone: string; // 6281xxxx
@@ -313,6 +484,122 @@ async function createTestOrderInSupabase(payload: TestOrderPayload) {
   };
 }
 
+/* ====== CREATE ORDER BENERAN DARI MANUAL (multi-item) ====== */
+
+async function createOrderFromResolvedManual(
+  waPhone: string,
+  waName: string | undefined,
+  state: ManualOrderState,
+) {
+  const { parsed, resolvedItems } = state;
+
+  if (!resolvedItems || resolvedItems.length === 0) {
+    throw new Error('No resolved items in manual order state');
+  }
+
+  // 1) Cari / buat customer
+  let customerId: number;
+
+  {
+    const { data: existing, error: findErr } = await supabase
+      .from('customers')
+      .select('id')
+      .eq('phone', waPhone)
+      .maybeSingle();
+
+    if (findErr) {
+      console.error('[Supabase] find customer error', findErr);
+    }
+
+    if (existing?.id) {
+      customerId = existing.id;
+    } else {
+      const { data: inserted, error: insertErr } = await supabase
+        .from('customers')
+        .insert({
+          phone: waPhone,
+          name: waName ?? parsed.name ?? null,
+          default_zone_id: null,
+          address_text: parsed.address ?? null,
+        })
+        .select('id')
+        .single();
+
+      if (insertErr || !inserted) {
+        throw new Error('Failed to insert customer: ' + insertErr?.message);
+      }
+
+      customerId = inserted.id;
+    }
+  }
+
+  // 2) Hitung total
+  const subtotal = resolvedItems.reduce((sum, item) => sum + item.lineTotal, 0);
+  const deliveryFee = 0; // TODO: nanti isi pakai logic zone
+  const discountTotal = 0;
+  const grandTotal = subtotal + deliveryFee - discountTotal;
+
+  // 3) Insert ke orders
+  const { data: orderRow, error: orderErr } = await supabase
+    .from('orders')
+    .insert({
+      customer_id: customerId,
+      status: 'PENDING', // setelah OK, kita anggap PENDING/CONFIRMED
+      source_channel: 'whatsapp',
+      address_text: parsed.address ?? '(alamat belum lengkap)',
+      zone_id: null, // TODO: nanti diisi setelah ada logic zones
+      subtotal,
+      delivery_fee: deliveryFee,
+      discount_total: discountTotal,
+      grand_total: grandTotal,
+      payment_method: 'COD', // sementara default COD
+    })
+    .select('id')
+    .single();
+
+  if (orderErr || !orderRow) {
+    throw new Error('Failed to insert order: ' + orderErr?.message);
+  }
+
+  const orderId = orderRow.id;
+
+  // 4) Insert banyak order_items sekaligus
+  const itemsPayload = resolvedItems.map((item) => ({
+    order_id: orderId,
+    product_id: item.productId,
+    qty: item.qty,
+    unit_price: item.unitPrice,
+    line_total: item.lineTotal,
+  }));
+
+  const { error: itemsErr } = await supabase
+    .from('order_items')
+    .insert(itemsPayload);
+
+  if (itemsErr) {
+    throw new Error('Failed to insert order_items: ' + itemsErr.message);
+  }
+
+  // 5) Insert payments
+  const { error: payErr } = await supabase.from('payments').insert({
+    order_id: orderId,
+    method: 'COD',
+    status: 'PENDING',
+    amount: grandTotal,
+  });
+
+  if (payErr) {
+    throw new Error('Failed to insert payment: ' + payErr.message);
+  }
+
+  return {
+    orderId,
+    subtotal,
+    grandTotal,
+    items: resolvedItems,
+  };
+}
+
 /* ====================== Helpers kirim pesan WA ======================== */
 
 async function sendWhatsAppText(to: string, body: string) {
@@ -406,8 +693,8 @@ async function handleMenuSelection(
         'Saat ini katalog masih versi awal.',
         'Ketik saja dulu daftar sayur yang mau dibeli, contoh:',
         '',
-        '- Bayam x2',
-        '- Brokoli x1',
+        '- Bayam 2 ikat',
+        '- Brokoli 1',
         '',
         'Ke depan akan ada link katalog interaktif ya 🌿',
       ].join('\n'),
@@ -422,15 +709,15 @@ async function handleMenuSelection(
         'NAMA:',
         'ALAMAT LENGKAP:',
         'ORDER:',
-        '- Bayam x2',
+        '- Bayam 2 ikat',
         '- Wortel 500gr',
         '',
         'Contoh:',
         'NAMA: Budi',
         'ALAMAT: Graha Family, Jl. XYZ No. 10',
         'ORDER:',
-        '- Bayam x2',
-        '- Brokoli x1',
+        '- Bayam 2 ikat',
+        '- Brokoli 1',
       ].join('\n'),
     );
   } else if (choice === 'cs') {
@@ -511,7 +798,7 @@ export async function POST(req: NextRequest) {
         normalized,
       });
 
-      /* ----- BRANCH: TEST BAYAM N (langsung buat order TEST) ----- */
+      /* ----- BRANCH: TEST BAYAM N (langsung buat order TEST PS-BAYAM) ----- */
 
       const testMatch = normalized.match(/^(tes|test) bayam(?:\s+(\d+))?$/);
 
@@ -532,13 +819,13 @@ export async function POST(req: NextRequest) {
           await sendWhatsAppText(
             from,
             [
-              '✅ Order TEST berhasil dibuat di sistem.',
+              '✅ Order TEST (PS-BAYAM) berhasil dibuat di sistem.',
               '',
               `ID Order : ${result.orderId}`,
               `Item     : ${result.productName} x ${result.qty}`,
               `Total    : Rp ${result.grandTotal.toLocaleString('id-ID')}`,
               '',
-              'Ini hanya order TEST, tidak akan dikirim ya kak 🙏',
+              'Ini hanya order TEST internal, tidak akan dikirim ya kak 🙏',
             ].join('\n'),
           );
 
@@ -570,17 +857,37 @@ export async function POST(req: NextRequest) {
         const parsed = parseManualOrderText(from, text);
         const draft = buildOrderDraft(parsed);
 
-        // simpan draft manual terakhir untuk nomor ini
-        lastManualOrders[from] = parsed;
-
         console.log(
-          '[PakSayur] OrderDraftPayload:',
+          '[PakSayur] OrderDraftPayload (raw):',
           JSON.stringify(draft, null, 2),
         );
 
+        // resolve ke product_aliases + products
+        const resolution = await resolveManualOrder(parsed);
+
+        if (!resolution.ok) {
+          const msg = [
+            'Maaf kak, ada beberapa masalah saat membaca order kakak:',
+            '',
+            ...resolution.errors.map((e) => `- ${e}`),
+            '',
+            'Silakan revisi ORDER dan kirim ulang format NAMA / ALAMAT / ORDER ya kak 🙏',
+          ].join('\n');
+
+          await sendWhatsAppText(from, msg);
+
+          return NextResponse.json(
+            { status: 'manual-order-resolve-error', errors: resolution.errors },
+            { status: 200 },
+          );
+        }
+
+        // simpan draft resolved di memory
+        lastManualOrders[from] = resolution.state;
+
         await sendWhatsAppText(from, formatManualOrderConfirmation(parsed));
         return NextResponse.json(
-          { status: 'ok-manual-order' },
+          { status: 'ok-manual-order-resolved' },
           { status: 200 },
         );
       }
@@ -588,48 +895,63 @@ export async function POST(req: NextRequest) {
       /* ----- BRANCH: USER BALAS "OK" SETELAH RINGKASAN ----- */
 
       if (normalized === 'ok' || normalized === 'ok kak') {
-        const draft = lastManualOrders[from];
+        const state = lastManualOrders[from];
 
-        let qtyFromDraft: number | null = null;
-        if (draft) {
-          qtyFromDraft = extractBayamQtyFromItems(draft.items);
+        if (!state || !state.resolvedItems || state.resolvedItems.length === 0) {
+          await sendWhatsAppText(
+            from,
+            'Maaf kak, belum ada order manual yang bisa dikonfirmasi. Silakan kirim dulu format NAMA / ALAMAT / ORDER ya 🙏',
+          );
+          return NextResponse.json(
+            { status: 'ok-no-draft' },
+            { status: 200 },
+          );
         }
 
-        const finalQty = qtyFromDraft && qtyFromDraft > 0 ? qtyFromDraft : 2;
-
         try {
-          const result = await createTestOrderInSupabase({
-            waPhone: from,
-            waName: contactName,
-            originalText: draft?.raw_text ?? trimmed,
-            qty: finalQty,
-          });
+          const result = await createOrderFromResolvedManual(
+            from,
+            contactName,
+            state,
+          );
+
+          const itemsText = result.items
+            .map(
+              (i) =>
+                `- ${i.productName} x ${i.qty}  (Rp ${i.lineTotal.toLocaleString(
+                  'id-ID',
+                )})`,
+            )
+            .join('\n');
 
           await sendWhatsAppText(
             from,
             [
-              '✅ Order TEST berhasil dibuat di sistem.',
+              '✅ Order berhasil dibuat di sistem.',
               '',
               `ID Order : ${result.orderId}`,
-              `Item     : ${result.productName} x ${result.qty}`,
-              `Total    : Rp ${result.grandTotal.toLocaleString('id-ID')}`,
               '',
-              'Ini hanya order TEST, tidak akan dikirim ya kak 🙏',
+              'Item:',
+              itemsText,
+              '',
+              `Total : Rp ${result.grandTotal.toLocaleString('id-ID')}`,
+              '',
+              'Terima kasih kak 🙏',
             ].join('\n'),
           );
 
           return NextResponse.json(
-            { status: 'ok-test-order-from-ok', qtyFromDraft },
+            { status: 'ok-order-from-ok', orderId: result.orderId },
             { status: 200 },
           );
         } catch (e) {
-          console.error('[TEST_ORDER_OK] Error', e);
+          console.error('[ORDER_FROM_OK] Error', e);
           await sendWhatsAppText(
             from,
-            'Maaf kak, terjadi error saat membuat order TEST dari balasan OK. Nanti admin cek dulu ya 🙏',
+            'Maaf kak, terjadi error saat membuat order dari balasan OK. Nanti admin cek dulu ya 🙏',
           );
           return NextResponse.json(
-            { status: 'error-test-order-from-ok' },
+            { status: 'error-order-from-ok' },
             { status: 200 },
           );
         }
