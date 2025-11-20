@@ -1,389 +1,359 @@
 // app/api/whatsapp/webhook/route.ts
 import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 
 export const dynamic = 'force-dynamic';
 
-// ==== ENV CONFIG ====
+// ============ ENV CONFIG ============
+
+// WhatsApp (sudah kamu set di Vercel)
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN!;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN!;
 const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID!;
 
+// Supabase (baru kamu tambah)
+const SUPABASE_URL = process.env.SUPABASE_URL!;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+
 if (!VERIFY_TOKEN || !WHATSAPP_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
   console.warn(
-    '[WhatsApp] ENV vars missing. Please set WHATSAPP_VERIFY_TOKEN, WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID'
+    '[WhatsApp] ENV vars missing. Please set WHATSAPP_VERIFY_TOKEN, WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID',
   );
 }
 
-/* ===================== Types & Parser Manual Order ===================== */
-
-// Kata kunci + typo yang masih diterima parser
-const NAME_KEYS = ['nama', 'nm', 'nma'];
-const ADDRESS_KEYS = ['alamat', 'almt', 'almat', 'alamt', 'alt', 'alm'];
-const ORDER_KEYS = ['order', 'ordr', 'odr', 'oder'];
-
-type ManualOrderItem = {
-  raw: string;
-};
-
-type ManualOrderPayload = {
-  customer_phone: string;
-  raw_text: string;
-  name?: string;
-  address?: string;
-  items: ManualOrderItem[];
-};
-
-// Payload yang nanti dikirim ke backend / Ryo
-type OrderDraftPayload = {
-  source_channel: 'whatsapp';
-  wa_phone: string;
-  customer_name?: string;
-  address_text?: string;
-  manual_raw_text: string;
-  items_raw: string[];
-};
-
-function matchKeyword(line: string, keywords: string[]): string | null {
-  const lower = line.toLowerCase().trimStart();
-  for (const k of keywords) {
-    if (lower.startsWith(k)) {
-      return k;
-    }
-  }
-  return null;
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  console.warn(
+    '[Supabase] ENV vars missing. Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY',
+  );
 }
 
-function extractAfterKeyword(line: string, keyword: string): string {
-  const lower = line.toLowerCase();
-  const idx = lower.indexOf(keyword);
-  if (idx < 0) return '';
-  let rest = line.slice(idx + keyword.length);
-  // buang spasi / titik dua / dash setelah keyword
-  rest = rest.replace(/^[\s:.-]+/, '');
-  return rest.trim();
-}
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-function parseManualOrderText(from: string, text: string): ManualOrderPayload {
-  const lines = text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
-
-  let section: 'none' | 'name' | 'address' | 'order' = 'none';
-  let name = '';
-  const addressLines: string[] = [];
-  const items: ManualOrderItem[] = [];
-
-  for (const line of lines) {
-    const nameKey = matchKeyword(line, NAME_KEYS);
-    const addrKey = matchKeyword(line, ADDRESS_KEYS);
-    const orderKey = matchKeyword(line, ORDER_KEYS);
-
-    if (nameKey) {
-      name = extractAfterKeyword(line, nameKey);
-      section = 'name';
-      continue;
-    }
-
-    if (addrKey) {
-      const val = extractAfterKeyword(line, addrKey);
-      if (val) addressLines.push(val);
-      section = 'address';
-      continue;
-    }
-
-    if (orderKey) {
-      const val = extractAfterKeyword(line, orderKey);
-      if (val) items.push({ raw: val });
-      section = 'order';
-      continue;
-    }
-
-    if (section === 'address') {
-      addressLines.push(line);
-    } else if (section === 'order') {
-      const cleaned = line.replace(/^[-•\s]+/, '').trim();
-      if (cleaned) items.push({ raw: cleaned });
-    }
-  }
-
-  return {
-    customer_phone: from,
-    raw_text: text,
-    name: name || undefined,
-    address: addressLines.join(' ').trim() || undefined,
-    items,
-  };
-}
-
-function buildOrderDraft(parsed: ManualOrderPayload): OrderDraftPayload {
-  return {
-    source_channel: 'whatsapp',
-    wa_phone: parsed.customer_phone,
-    customer_name: parsed.name,
-    address_text: parsed.address,
-    manual_raw_text: parsed.raw_text,
-    items_raw: parsed.items.map((i) => i.raw),
-  };
-}
-
-function formatManualOrderConfirmation(order: ManualOrderPayload): string {
-  const name = order.name || '(belum diisi)';
-  const address = order.address || '(belum diisi)';
-  const itemsText = order.items.length
-    ? order.items.map((i) => `- ${i.raw}`).join('\n')
-    : '- (belum ada item)';
-
-  return [
-    'Terima kasih kak, berikut ringkasan order kakak 👇',
-    '',
-    `Nama: ${name}`,
-    `Alamat: ${address}`,
-    '',
-    'Order:',
-    itemsText,
-    '',
-    'Kalau sudah benar, balas: *OK* ya kak 🙏',
-    'Kalau mau revisi, silakan kirim ulang format NAMA / ALAMAT / ORDER.',
-  ].join('\n');
-}
-
-/* ====================== Helpers kirim pesan WA ======================== */
+// ============ HELPERS – WHATSAPP ============
 
 async function sendWhatsAppText(to: string, body: string) {
   const url = `https://graph.facebook.com/v21.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
+  const payload = {
+    messaging_product: 'whatsapp',
+    to,
+    type: 'text',
+    text: {
+      preview_url: false,
+      body,
+    },
+  };
+
   const res = await fetch(url, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
       Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+      'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      messaging_product: 'whatsapp',
-      to,
-      type: 'text',
-      text: {
-        preview_url: false,
-        body,
-      },
-    }),
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
-    const errText = await res.text().catch(() => '');
-    console.error('[WhatsApp] sendWhatsAppText error', res.status, errText);
+    console.error('[WhatsApp] Failed to send text', await res.text());
   }
 }
 
 async function sendWhatsAppMenuButtons(to: string) {
   const url = `https://graph.facebook.com/v21.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
+  const payload = {
+    messaging_product: 'whatsapp',
+    to,
+    type: 'interactive',
+    interactive: {
+      type: 'button',
+      body: {
+        text: 'Halo kak 👋\nSilakan pilih menu di bawah ini:',
+      },
+      action: {
+        buttons: [
+          {
+            type: 'reply',
+            reply: {
+              id: 'ORDER_SAYUR',
+              title: '🛒 Order sayur',
+            },
+          },
+          {
+            type: 'reply',
+            reply: {
+              id: 'LIHAT_MENU',
+              title: '📋 Lihat menu hari ini',
+            },
+          },
+        ],
+      },
+    },
+  };
+
   const res = await fetch(url, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
       Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+      'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      messaging_product: 'whatsapp',
-      to,
-      type: 'interactive',
-      interactive: {
-        type: 'button',
-        body: {
-          text: [
-            'Halo kak 👋, selamat datang di *Pak Sayur Bot* 🌿',
-            '',
-            'Silakan pilih salah satu:',
-          ].join('\n'),
-        },
-        action: {
-          buttons: [
-            {
-              type: 'reply',
-              reply: { id: 'order_catalog', title: 'Order katalog' },
-            },
-            {
-              type: 'reply',
-              reply: { id: 'order_manual', title: 'Order manual' },
-            },
-            {
-              type: 'reply',
-              reply: { id: 'chat_cs', title: 'Chat CS' },
-            },
-          ],
-        },
-      },
-    }),
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
-    const errText = await res.text().catch(() => '');
-    console.error('[WhatsApp] sendWhatsAppMenuButtons error', res.status, errText);
+    console.error('[WhatsApp] Failed to send menu', await res.text());
   }
 }
 
-async function handleMenuSelection(
-  from: string,
-  choice: 'catalog' | 'manual' | 'cs'
-) {
-  if (choice === 'catalog') {
-    await sendWhatsAppText(
-      from,
-      [
-        'Oke kak, untuk *order lewat katalog* 📖',
-        '',
-        'Saat ini katalog masih versi awal.',
-        'Ketik saja dulu daftar sayur yang mau dibeli, contoh:',
-        '',
-        '- Bayam x2',
-        '- Brokoli x1',
-        '',
-        'Ke depan akan ada link katalog interaktif ya 🌿',
-      ].join('\n')
-    );
-  } else if (choice === 'manual') {
-    await sendWhatsAppText(
-      from,
-      [
-        'Oke kak, *order ketik manual* ✍️',
-        '',
-        'Kirim dengan format:',
-        'NAMA:',
-        'ALAMAT LENGKAP:',
-        'ORDER:',
-        '- Bayam x2',
-        '- Wortel 500gr',
-        '',
-        'Contoh:',
-        'NAMA: Budi',
-        'ALAMAT: Graha Family, Jl. XYZ No. 10',
-        'ORDER:',
-        '- Bayam x2',
-        '- Brokoli x1',
-      ].join('\n')
-    );
-  } else if (choice === 'cs') {
-    await sendWhatsAppText(
-      from,
-      'Kalau mau chat langsung dengan CS manusia 👩‍🍳, klik: https://wa.me/6285190653341'
-    );
+// ============ HELPER – TEST ORDER SUPABASE ============
+
+type TestOrderPayload = {
+  waPhone: string; // 6281xxxx
+  waName?: string;
+  originalText?: string;
+};
+
+async function createTestOrderInSupabase(payload: TestOrderPayload) {
+  const { waPhone, waName } = payload;
+
+  // 1) Cari / buat customer
+  let customerId: number;
+
+  {
+    const { data: existing, error: findErr } = await supabase
+      .from('customers')
+      .select('id')
+      .eq('phone', waPhone)
+      .maybeSingle();
+
+    if (findErr) {
+      console.error('[Supabase] find customer error', findErr);
+    }
+
+    if (existing?.id) {
+      customerId = existing.id;
+    } else {
+      const { data: inserted, error: insertErr } = await supabase
+        .from('customers')
+        .insert({
+          phone: waPhone,
+          name: waName ?? null,
+          default_zone_id: null,
+          address_text: null,
+        })
+        .select('id')
+        .single();
+
+      if (insertErr || !inserted) {
+        throw new Error('Failed to insert customer: ' + insertErr?.message);
+      }
+
+      customerId = inserted.id;
+    }
   }
+
+  // 2) Ambil produk PS-BAYAM
+  const { data: product, error: prodErr } = await supabase
+    .from('products')
+    .select('id, name, price')
+    .eq('sku', 'PS-BAYAM')
+    .single();
+
+  if (prodErr || !product) {
+    throw new Error('Product PS-BAYAM not found: ' + prodErr?.message);
+  }
+
+  const qty = 2; // karena TEST BAYAM 2
+  const unitPrice = product.price as number;
+  const lineTotal = qty * unitPrice;
+  const subtotal = lineTotal;
+  const deliveryFee = 0;
+  const discountTotal = 0;
+  const grandTotal = subtotal + deliveryFee - discountTotal;
+
+  // 3) Insert ke orders (schema dari Ryo)
+  const { data: orderRow, error: orderErr } = await supabase
+    .from('orders')
+    .insert({
+      customer_id: customerId,
+      status: 'PENDING', // order_status enum
+      source_channel: 'whatsapp',
+      address_text: '(TEST ORDER – belum ada alamat)',
+      zone_id: null,
+      subtotal,
+      delivery_fee: deliveryFee,
+      discount_total: discountTotal,
+      grand_total: grandTotal,
+      payment_method: 'COD', // payment_method_enum
+    })
+    .select('id')
+    .single();
+
+  if (orderErr || !orderRow) {
+    throw new Error('Failed to insert order: ' + orderErr?.message);
+  }
+
+  const orderId = orderRow.id;
+
+  // 4) Insert ke order_items
+  const { error: itemsErr } = await supabase.from('order_items').insert({
+    order_id: orderId,
+    product_id: product.id,
+    qty,
+    unit_price: unitPrice,
+    line_total: lineTotal,
+  });
+
+  if (itemsErr) {
+    throw new Error('Failed to insert order_items: ' + itemsErr.message);
+  }
+
+  // 5) Insert ke payments
+  const { error: payErr } = await supabase.from('payments').insert({
+    order_id: orderId,
+    method: 'COD',
+    status: 'PENDING', // payment_status_enum
+    amount: grandTotal,
+  });
+
+  if (payErr) {
+    throw new Error('Failed to insert payment: ' + payErr.message);
+  }
+
+  return {
+    orderId,
+    subtotal,
+    grandTotal,
+    productName: product.name,
+    qty,
+  };
 }
 
-/* ============================ GET: verify ============================= */
+// ============ GET – VERIFICATION ============
 
 export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const mode = searchParams.get('hub.mode');
-  const token = searchParams.get('hub.verify_token');
-  const challenge = searchParams.get('hub.challenge');
+  const url = new URL(req.url);
+  const mode = url.searchParams.get('hub.mode');
+  const token = url.searchParams.get('hub.verify_token');
+  const challenge = url.searchParams.get('hub.challenge');
 
   if (mode === 'subscribe' && token === VERIFY_TOKEN) {
-    return new NextResponse(challenge ?? '', { status: 200 });
+    console.log('[WhatsApp] Webhook verified');
+    return new Response(challenge ?? '', { status: 200 });
   }
 
-  return new NextResponse('Forbidden', { status: 403 });
+  return new Response('Forbidden', { status: 403 });
 }
 
-/* ============================ POST: webhook =========================== */
+// ============ POST – HANDLE MESSAGES ============
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-
-    if (body.object !== 'whatsapp_business_account') {
-      return NextResponse.json({ status: 'ignored' }, { status: 200 });
-    }
+    console.log('[WhatsApp] Webhook body:', JSON.stringify(body, null, 2));
 
     const entry = body.entry?.[0];
     const changes = entry?.changes?.[0];
     const value = changes?.value;
-    const message = value?.messages?.[0];
 
-    if (!message) {
-      return NextResponse.json({ status: 'no-message' }, { status: 200 });
+    const messages = value?.messages;
+    if (!messages || messages.length === 0) {
+      return NextResponse.json({ status: 'no-messages' }, { status: 200 });
     }
 
-    const from = message.from as string;
+    const msg = messages[0];
+    const from = msg.from as string; // nomor WA 628...
+    const type = msg.type as string;
+    const contactName: string | undefined =
+      value?.contacts?.[0]?.profile?.name;
 
-    // 1) Interactive buttons
-    if (
-      message.type === 'interactive' &&
-      message.interactive?.type === 'button_reply'
-    ) {
-      const reply = message.interactive.button_reply;
-      const id = reply.id as string;
+    let textBody: string = '';
 
-      if (id === 'order_catalog') {
-        await handleMenuSelection(from, 'catalog');
-      } else if (id === 'order_manual') {
-        await handleMenuSelection(from, 'manual');
-      } else if (id === 'chat_cs') {
-        await handleMenuSelection(from, 'cs');
-      }
-
-      return NextResponse.json({ status: 'ok-button' }, { status: 200 });
+    if (type === 'text') {
+      textBody = (msg.text?.body ?? '').trim();
+    } else if (type === 'button') {
+      textBody = (msg.button?.text ?? '').trim();
+    } else if (type === 'interactive') {
+      const iid = msg.interactive?.button_reply?.id;
+      textBody = iid ?? '';
     }
 
-    // 2) Text messages
-    if (message.type === 'text') {
-      const text = (message.text?.body || '') as string;
-      const lowerFull = text.toLowerCase();
+    // ========== BRANCH 1: TEST ORDER ==========
+    if (textBody.toUpperCase() === 'TEST BAYAM 2') {
+      try {
+        const result = await createTestOrderInSupabase({
+          waPhone: from,
+          waName: contactName,
+          originalText: textBody,
+        });
 
-      // Deteksi manual order kalau ada salah satu varian nama + alamat + order
-      const hasName = NAME_KEYS.some((k) => lowerFull.includes(k));
-      const hasAddr = ADDRESS_KEYS.some((k) => lowerFull.includes(k));
-      const hasOrder = ORDER_KEYS.some((k) => lowerFull.includes(k));
-
-      if (hasName && hasAddr && hasOrder) {
-        const parsed = parseManualOrderText(from, text);
-        const draft = buildOrderDraft(parsed);
-
-        console.log(
-          '[PakSayur] OrderDraftPayload:',
-          JSON.stringify(draft, null, 2)
+        await sendWhatsAppText(
+          from,
+          [
+            '✅ Order TEST berhasil dibuat di sistem.',
+            '',
+            `ID Order : ${result.orderId}`,
+            `Item     : ${result.productName} x ${result.qty}`,
+            `Total    : Rp ${result.grandTotal.toLocaleString('id-ID')}`,
+            '',
+            'Ini hanya order TEST, tidak akan dikirim ya kak 🙏',
+          ].join('\n'),
         );
 
-        // Nanti di sini tinggal tambahin fetch ke backend Ryo
-        // await fetch(BACKEND_URL + '/api/orders/from-whatsapp-manual', { ... })
-
-        await sendWhatsAppText(from, formatManualOrderConfirmation(parsed));
         return NextResponse.json(
-          { status: 'ok-manual-order' },
-          { status: 200 }
+          { status: 'ok-test-order' },
+          { status: 200 },
+        );
+      } catch (e: any) {
+        console.error('[TEST_ORDER] Error', e);
+        await sendWhatsAppText(
+          from,
+          'Maaf kak, terjadi error saat membuat order TEST. Nanti admin cek dulu ya 🙏',
+        );
+        return NextResponse.json(
+          { status: 'error-test-order' },
+          { status: 200 },
         );
       }
+    }
 
-      const t = text.toLowerCase().trim();
+    // ========== BRANCH 2: MENU BUTTONS / TEXT BIASA ==========
 
-      if (t === 'menu' || t === 'start' || t === 'halo') {
-        await sendWhatsAppMenuButtons(from);
-        return NextResponse.json({ status: 'ok-menu' }, { status: 200 });
-      }
+    // Kalau user pilih tombol pertama
+    if (textBody === 'ORDER_SAYUR') {
+      await sendWhatsAppText(
+        from,
+        'Kak, silakan tulis order kakak (contoh: "bayam 2 ikat, kangkung 1 ikat, alamat di Graha Family blok SS 5").\n\nUntuk sementara, kami masih proses manual ya 🙏',
+      );
+      return NextResponse.json({ status: 'ok-order-prompt' }, { status: 200 });
+    }
 
-      if (t === '1') {
-        await handleMenuSelection(from, 'catalog');
-        return NextResponse.json({ status: 'ok-1' }, { status: 200 });
-      }
-      if (t === '2') {
-        await handleMenuSelection(from, 'manual');
-        return NextResponse.json({ status: 'ok-2' }, { status: 200 });
-      }
-      if (t === '3') {
-        await handleMenuSelection(from, 'cs');
-        return NextResponse.json({ status: 'ok-3' }, { status: 200 });
-      }
-
-      await sendWhatsAppMenuButtons(from);
+    if (textBody === 'LIHAT_MENU') {
+      await sendWhatsAppText(
+        from,
+        'Menu hari ini masih dummy ya kak. Nanti kalau sudah tersambung ke katalog, tombol ini akan kirim daftar sayur otomatis 🥬',
+      );
       return NextResponse.json(
-        { status: 'ok-fallback-text' },
-        { status: 200 }
+        { status: 'ok-menu-placeholder' },
+        { status: 200 },
       );
     }
 
-    // 3) Tipe pesan lain (gambar, audio, dll) → kirim menu
+    // Kalau pesan text biasa → kirim balasan simple + menu
+    if (type === 'text') {
+      await sendWhatsAppText(
+        from,
+        `Halo ${contactName ?? 'kak'} 👋\nPesan kakak: "${textBody}".\n\nUntuk mulai, kakak bisa ketik *TEST BAYAM 2* (test order ke sistem), atau tekan tombol di bawah ini.`,
+      );
+      await sendWhatsAppMenuButtons(from);
+
+      return NextResponse.json(
+        { status: 'ok-fallback-text' },
+        { status: 200 },
+      );
+    }
+
+    // Tipe pesan lain (gambar, audio, dsb) → kirim menu
     await sendWhatsAppMenuButtons(from);
     return NextResponse.json({ status: 'ok-other-type' }, { status: 200 });
   } catch (err) {
