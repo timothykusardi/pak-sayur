@@ -29,12 +29,7 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-/* ===================== Types & Parser Manual Order ===================== */
-
-// Kata kunci + typo yang masih diterima parser
-const NAME_KEYS = ['nama', 'nm', 'nma'];
-const ADDRESS_KEYS = ['alamat', 'almt', 'almat', 'alamt', 'alt', 'alm'];
-const ORDER_KEYS = ['order', 'ordr', 'odr', 'oder'];
+/* ====== STATE SEDERHANA UNTUK SIMPAN DRAFT MANUAL PER NOMOR ====== */
 
 type ManualOrderItem = {
   raw: string;
@@ -47,6 +42,16 @@ type ManualOrderPayload = {
   address?: string;
   items: ManualOrderItem[];
 };
+
+// map: nomor WA (628xx) -> draft manual terakhir
+const lastManualOrders: Record<string, ManualOrderPayload> = {};
+
+/* ===================== Parser Manual Order ===================== */
+
+// Kata kunci + typo yang masih diterima parser
+const NAME_KEYS = ['nama', 'nm', 'nma'];
+const ADDRESS_KEYS = ['alamat', 'almt', 'almat', 'alamt', 'alt', 'alm'];
+const ORDER_KEYS = ['order', 'ordr', 'odr', 'oder'];
 
 // Payload yang nanti dikirim ke backend / Ryo
 type OrderDraftPayload = {
@@ -161,6 +166,26 @@ function formatManualOrderConfirmation(order: ManualOrderPayload): string {
     'Kalau sudah benar, balas: *OK* ya kak 🙏',
     'Kalau mau revisi, silakan kirim ulang format NAMA / ALAMAT / ORDER.',
   ].join('\n');
+}
+
+/* ===== Helper: ambil qty bayam dari item manual (bayam 2, bayam x3, dst) ===== */
+
+function extractBayamQtyFromItems(items: ManualOrderItem[]): number | null {
+  for (const item of items) {
+    const lower = item.raw.toLowerCase();
+    if (!lower.includes('bayam')) continue;
+
+    // Cari angka pertama di string, misal:
+    // "bayam 2", "bayam x2", "2 bayam", "bayam 10 ikat"
+    const match = lower.match(/(\d+(?:[.,]\d+)?)/);
+    if (match) {
+      const n = Number(match[1].replace(',', '.'));
+      if (!Number.isNaN(n) && n > 0) {
+        return n;
+      }
+    }
+  }
+  return null;
 }
 
 /* ====================== TEST ORDER (SUPABASE) ======================== */
@@ -480,6 +505,7 @@ export async function POST(req: NextRequest) {
       const normalized = trimmed.toLowerCase().replace(/\s+/g, ' ');
 
       console.log('[DEBUG] incoming text', {
+        from,
         text,
         trimmed,
         normalized,
@@ -544,12 +570,14 @@ export async function POST(req: NextRequest) {
         const parsed = parseManualOrderText(from, text);
         const draft = buildOrderDraft(parsed);
 
+        // simpan draft manual terakhir untuk nomor ini
+        lastManualOrders[from] = parsed;
+
         console.log(
           '[PakSayur] OrderDraftPayload:',
           JSON.stringify(draft, null, 2),
         );
 
-        // Sekarang hanya kirim ringkasan + instruksi OK
         await sendWhatsAppText(from, formatManualOrderConfirmation(parsed));
         return NextResponse.json(
           { status: 'ok-manual-order' },
@@ -560,13 +588,21 @@ export async function POST(req: NextRequest) {
       /* ----- BRANCH: USER BALAS "OK" SETELAH RINGKASAN ----- */
 
       if (normalized === 'ok' || normalized === 'ok kak') {
-        // Versi TEST: setiap "OK" → buat 1 order TEST PS-BAYAM x2
+        const draft = lastManualOrders[from];
+
+        let qtyFromDraft: number | null = null;
+        if (draft) {
+          qtyFromDraft = extractBayamQtyFromItems(draft.items);
+        }
+
+        const finalQty = qtyFromDraft && qtyFromDraft > 0 ? qtyFromDraft : 2;
+
         try {
           const result = await createTestOrderInSupabase({
             waPhone: from,
             waName: contactName,
-            originalText: trimmed,
-            qty: 2, // sementara fix 2; nanti bisa dihubungkan ke parser item
+            originalText: draft?.raw_text ?? trimmed,
+            qty: finalQty,
           });
 
           await sendWhatsAppText(
@@ -583,7 +619,7 @@ export async function POST(req: NextRequest) {
           );
 
           return NextResponse.json(
-            { status: 'ok-test-order-from-ok' },
+            { status: 'ok-test-order-from-ok', qtyFromDraft },
             { status: 200 },
           );
         } catch (e) {
