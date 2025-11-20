@@ -184,9 +184,9 @@ function formatManualOrderConfirmation(order: ManualOrderPayload): string {
     'Order:',
     itemsText,
     '',
-    'Kalau sudah benar, balas salah satu:',
-    '- *OK COD* atau *COD* (bayar di tempat)',
-    '- *OK TF*, *TF*, *TRANSFER* (bayar via transfer)',
+    'Kalau sudah benar, balas:',
+    '- *OK COD* (bayar di tempat), atau',
+    '- *OK TRANSFER* (bayar via transfer).',
     '',
     'Kalau mau revisi, silakan kirim ulang format NAMA / ALAMAT / ORDER.',
   ].join('\n');
@@ -349,7 +349,6 @@ async function resolveManualOrder(
 
   if (aliasErr) {
     console.error('[Supabase] error reading product_aliases', aliasErr);
-    throw aliasErr;
   }
 
   const aliasMap = new Map<
@@ -492,10 +491,13 @@ async function createOrderFromResolvedManual(
         typeof zoneRow.delivery_fee === 'number' &&
         !Number.isNaN(zoneRow.delivery_fee)
       ) {
-        deliveryFeeDb = zoneRow.delivery_fee; // bisa 0 atau >0
+        deliveryFeeDb = zoneRow.delivery_fee; // 0 atau >0
       } else {
         deliveryFeeDb = null; // free, tidak disebut di konfirmasi
       }
+    } else {
+      // DB belum ada row, tapi alamat sudah jelas → tetap pakai kode dari rule untuk display
+      zoneCode = zoneRule.code;
     }
   }
 
@@ -563,8 +565,8 @@ async function createOrderFromResolvedManual(
     subtotal,
     grandTotal,
     items: resolvedItems,
-    deliveryFee: deliveryFeeForOrder,   // numeric yang dipakai di orders
-    deliveryFeeDb,                      // nullable: null = free (no fee set)
+    deliveryFee: deliveryFeeForOrder, // numeric yang dipakai di orders
+    deliveryFeeDb, // nullable: null = free (no fee set)
     paymentMethod,
     zoneCode,
   };
@@ -689,9 +691,9 @@ async function handleMenuSelection(
         '- Bayam 2 ikat',
         '- Brokoli 1',
         '',
-        'Setelah kami kirim ringkasan, kakak bisa balas salah satu:',
-        '- *OK COD* / *COD* (bayar di tempat)',
-        '- *OK TF* / *TF* / *TRANSFER* (bayar via transfer) 🙏',
+        'Setelah kami kirim ringkasan, kakak bisa balas:',
+        '- *OK COD* (bayar di tempat), atau',
+        '- *OK TRANSFER* (bayar via transfer).',
       ].join('\n'),
     );
   } else if (choice === 'cs') {
