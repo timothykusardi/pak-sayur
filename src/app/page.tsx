@@ -1,6 +1,13 @@
 // src/app/page.tsx
+import type { Metadata } from "next";
 import Link from "next/link";
 import Image from "next/image";
+
+export const metadata: Metadata = {
+  title: "Pak Sayur Modern – Sayur Segar Keliling Surabaya",
+  description:
+    "Pesan sayur dan daging segar berkualitas untuk Graha Family, Royal Residence, Pakuwon City, dan berbagai perumahan lainnya di Surabaya. Pre-order via WhatsApp, antar pagi hari dengan jadwal teratur.",
+};
 
 const products = [
   { id: "kangkung",     name: "Kangkung",      src: "/images/products/kangkung.png" },
@@ -207,5 +214,5 @@ export default function Home() {
         </div>
       </div>
     </main>
-  );
+  )
 }
