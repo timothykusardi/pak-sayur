@@ -6,7 +6,7 @@ import { useMemo, useState } from 'react';
 
 /* =============================== Types/Enums =============================== */
 
-type AreaId = 'all' | 'barat' | 'timur';
+type AreaId = 'all' | 'barat' | 'tengah' | 'selatan' | 'timur';
 type DayId =
   | 'senin'
   | 'selasa'
@@ -16,24 +16,29 @@ type DayId =
   | 'sabtu'
   | 'minggu';
 
-type Slot = { label: string; time: string; group?: string };
-
 type Estate = {
   id: string;
   name: string;
-  area: Exclude<AreaId, 'all'>; // 'barat' | 'timur'
-  // optional: per-blok WA groups if needed later
-  groups?: Partial<Record<'A-B' | 'C-D' | 'E-H', string>>;
+  area: Exclude<AreaId, 'all'>; // 'barat' | 'tengah' | 'selatan' | 'timur'
+};
+
+type DaySchedule = {
+  hasService: boolean;
+  time?: string;
 };
 
 /* ================================== Data ================================== */
 
-// WEEKDAY slots only (Mon–Fri). Sat & Sun are OFF (by request).
-const WEEKDAY_SLOTS: Slot[] = [
-  { label: 'Blok A–B', time: '06:30 – 07:30' },
-  { label: 'Blok C–D', time: '07:30 – 08:30' },
-  { label: 'Blok E–H', time: '08:30 – 09:30' },
-];
+// Simple time window (same for all perumahan, no blok-level schedule)
+const DAY_SCHEDULE: Record<DayId, DaySchedule> = {
+  senin: { hasService: true, time: '06:30 – 10:00' },
+  selasa: { hasService: true, time: '06:30 – 10:00' },
+  rabu: { hasService: true, time: '06:30 – 10:00' },
+  kamis: { hasService: true, time: '06:30 – 10:00' },
+  jumat: { hasService: true, time: '06:30 – 10:00' },
+  sabtu: { hasService: false },
+  minggu: { hasService: false },
+};
 
 const DAY_LABEL: Record<DayId, string> = {
   senin: 'Senin',
@@ -43,6 +48,13 @@ const DAY_LABEL: Record<DayId, string> = {
   jumat: 'Jumat',
   sabtu: 'Sabtu',
   minggu: 'Minggu',
+};
+
+const AREA_BADGE_LABEL: Record<Exclude<AreaId, 'all'>, string> = {
+  barat: 'Surabaya Barat',
+  tengah: 'Surabaya Tengah',
+  selatan: 'Surabaya Selatan',
+  timur: 'Surabaya Timur',
 };
 
 const TODAY = (() => {
@@ -59,30 +71,41 @@ const TODAY = (() => {
   return map[new Date().getDay()];
 })();
 
-// Estates (subset; extend as needed)
+// Estates – synced with latest Privé Club list
 const ESTATES: Estate[] = [
   // BARAT
-  { id: 'graha-family', name: 'Graha Family', area: 'barat' },
+  { id: 'graha-famili', name: 'Graha Famili', area: 'barat' },
   { id: 'royal-residence', name: 'Royal Residence', area: 'barat' },
   { id: 'dian-istana', name: 'Dian Istana', area: 'barat' },
   { id: 'wisata-bukit-mas', name: 'Wisata Bukit Mas', area: 'barat' },
   { id: 'villa-bukit-mas', name: 'Villa Bukit Mas', area: 'barat' },
   { id: 'graha-natura', name: 'Graha Natura', area: 'barat' },
   { id: 'villa-bukit-regency', name: 'Villa Bukit Regency', area: 'barat' },
+  { id: 'grand-pakuwon', name: 'Grand Pakuwon', area: 'barat' },
+  { id: 'darmo-harapan-indah', name: 'Darmo Harapan Indah', area: 'barat' },
+  { id: 'pradah-indah', name: 'Pradah Indah', area: 'barat' },
+
+  // TENGAH
+  { id: 'darmo-area', name: 'Darmo Area', area: 'tengah' },
+  { id: 'gubeng-area', name: 'Gubeng Area', area: 'tengah' },
+
+  // SELATAN
+  { id: 'margorejo-area', name: 'Margorejo Area', area: 'selatan' },
+  { id: 'jemursari-area', name: 'Jemursari Area', area: 'selatan' },
+  { id: 'ketintang-area', name: 'Ketintang Area', area: 'selatan' },
 
   // TIMUR
   { id: 'pakuwon-city', name: 'Pakuwon City', area: 'timur' },
   { id: 'kertajaya-indah', name: 'Kertajaya Indah Regency', area: 'timur' },
+  { id: 'dharmahusada-indah', name: 'Dharmahusada Indah', area: 'timur' },
   { id: 'galaxy-bumi-permai', name: 'Galaxy Bumi Permai', area: 'timur' },
   { id: 'puri-galaxy', name: 'Puri Galaxy', area: 'timur' },
+  { id: 'manyar-residence', name: 'Manyar Residence', area: 'timur' },
   { id: 'mulyosari', name: 'Mulyosari Area', area: 'timur' },
+  { id: 'sutorejo-prima', name: 'Sutorejo Prima', area: 'timur' },
+  { id: 'east-coast-residence', name: 'East Coast Residence', area: 'timur' },
+  { id: 'laguna-residence', name: 'Laguna Residence', area: 'timur' },
 ];
-
-// Helper: which slots per day? (Sabtu & Minggu OFF)
-function getSlotsForDay(day: DayId): Slot[] {
-  if (day === 'sabtu' || day === 'minggu') return [];
-  return WEEKDAY_SLOTS;
-}
 
 /* ================================ Components =============================== */
 
@@ -93,15 +116,15 @@ function ScheduleCard({
   estate: Estate;
   day: DayId;
 }) {
-  const slots = getSlotsForDay(day);
-  const hasService = slots.length > 0;
+  const schedule = DAY_SCHEDULE[day];
+  const hasService = schedule.hasService;
 
   return (
     <div className="card p-5">
       <div className="mb-1 flex items-center justify-between">
         <div className="font-serif text-xl">{estate.name}</div>
         <span className="rounded-full border border-gold/20 px-3 py-1 text-xs text-goldmuted">
-          {estate.area === 'barat' ? 'Surabaya Barat' : 'Surabaya Timur'}
+          {AREA_BADGE_LABEL[estate.area]}
         </span>
       </div>
 
@@ -111,20 +134,23 @@ function ScheduleCard({
           <span className="text-gold">By request</span> (hubungi admin).
         </div>
       ) : (
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          {slots.map((s) => (
-            <div
-              key={`${estate.id}-${s.label}`}
-              className="rounded-xl border border-gold/15 bg-deep2 p-4"
-            >
-              <div className="flex items-center justify-between">
-                <div className="font-medium text-gold">{s.label}</div>
-                <div className="rounded-full border border-gold/20 px-3 py-1 text-xs">
-                  {s.time}
-                </div>
+        <div className="mt-3 rounded-xl border border-gold/15 bg-deep2 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-xs uppercase tracking-wide text-goldmuted">
+                {DAY_LABEL[day]} – Gelombang Pagi
+              </div>
+              <div className="mt-1 text-sm text-goldmuted">
+                Armada reguler keliling seluruh blok / cluster perumahan dalam
+                rentang waktu ini. Toleransi{' '}
+                <span className="text-gold">±15 menit</span> untuk cuaca &
+                akses cluster.
               </div>
             </div>
-          ))}
+            <div className="rounded-full border border-gold/20 px-4 py-1 text-sm font-medium text-gold">
+              {schedule.time}
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -172,9 +198,9 @@ export default function JadwalPage() {
           <p className="mt-3 text-lg text-goldmuted">
             Gelombang pagi <span className="text-gold">06:30–10:00</span>{' '}
             (<span className="text-gold">Senin–Jumat</span>).{' '}
-            <span className="text-gold">Sabtu & Minggu OFF</span>{' '}
-            / by request. Toleransi <span className="text-gold">±15 menit</span>{' '}
-            untuk cuaca & akses cluster.
+            <span className="text-gold">Sabtu & Minggu OFF</span> / by request.
+            Toleransi <span className="text-gold">±15 menit</span> untuk cuaca
+            & akses cluster.
           </p>
           <p className="mt-1 text-sm text-goldmuted">
             Tidak sempat pre-order? Tenang—armada keliling tetap tersedia di
@@ -217,9 +243,11 @@ export default function JadwalPage() {
           <div className="flex flex-wrap gap-2">
             {(
               [
-                { id: 'all', label: 'Semua' },
-                { id: 'barat', label: 'Barat' },
-                { id: 'timur', label: 'Timur' },
+                { id: 'all', label: 'Semua Surabaya' },
+                { id: 'barat', label: 'Surabaya Barat' },
+                { id: 'tengah', label: 'Surabaya Tengah' },
+                { id: 'selatan', label: 'Surabaya Selatan' },
+                { id: 'timur', label: 'Surabaya Timur' },
               ] as { id: AreaId; label: string }[]
             ).map((a) => (
               <button
@@ -241,7 +269,7 @@ export default function JadwalPage() {
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Cari perumahan… (contoh: Graha, Royal, Pakuwon)"
+              placeholder="Cari perumahan/area… (contoh: Graha, Royal, Pakuwon)"
               className="w-full rounded-xl border border-gold/15 bg-deep2 px-4 py-2 text-gold placeholder:text-goldmuted focus:outline-none focus:ring-1 focus:ring-gold/30"
             />
           </div>

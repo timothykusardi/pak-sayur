@@ -126,7 +126,7 @@ export default function KontakPage() {
               value={perumahan}
               onChange={(e) => setPerumahan(e.target.value)}
               className="w-full rounded-xl border border-gold/15 bg-deep2 px-4 py-2 text-gold placeholder:text-goldmuted focus:outline-none focus:ring-1 focus:ring-gold/30"
-              placeholder="Contoh: Graha Family"
+              placeholder="Contoh: Graha Famili"
             />
           </div>
           <div>

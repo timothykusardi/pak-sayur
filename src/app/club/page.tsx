@@ -20,8 +20,8 @@ type Estate = {
 const ESTATES: Estate[] = [
   /* --- SURABAYA BARAT --- */
   {
-    id: 'graha-family',
-    name: 'Graha Family',
+    id: 'graha-famili',
+    name: 'Graha Famili',
     area: 'barat',
     waGroupUrl: 'https://chat.whatsapp.com/J7G80pQMt5NA5N7l7ex2Oi',
   },
