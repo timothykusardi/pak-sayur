@@ -249,14 +249,14 @@ function parseItemLine(raw: string): ParsedItem | null {
   };
 }
 
-/* ===== Helper: ZONE DETECTION (KEYWORDS) ===== */
+/* ===== Helper: ZONE RULES (ALIAS / SINGKATAN) ===== */
 
 type ZoneRule = {
   code: string; // harus sama dengan zones.code di DB
   keywords: string[];
 };
 
-// Hanya untuk mapping alamat → zone.code  (ongkir ambil dari DB)
+// Untuk alias / singkatan yang beda dengan nama di DB
 const ZONE_RULES: ZoneRule[] = [
   {
     code: 'GRAHA_FAMILI',
@@ -288,18 +288,115 @@ const ZONE_RULES: ZoneRule[] = [
   },
 ];
 
-function detectZoneFromAddress(
-  address: string | undefined,
-): ZoneRule | null {
-  if (!address) return null;
-  const lower = address.toLowerCase();
+type ZoneDetectResult = {
+  zoneId: number | null;
+  zoneCode: string | null;
+  deliveryFeeDb: number | null; // null = free (no fee set)
+};
 
+/**
+ * Deteksi zona:
+ * 1) Cek nama perumahan dari DB (zones.name) → kalau alamat mengandung, pakai itu.
+ * 2) Kalau tidak ketemu, fallback ke ZONE_RULES (alias / singkatan).
+ */
+async function detectZoneInfo(
+  address: string | undefined,
+): Promise<ZoneDetectResult> {
+  if (!address) {
+    return { zoneId: null, zoneCode: null, deliveryFeeDb: null };
+  }
+
+  const lowerAddr = address.toLowerCase();
+
+  // Step 1: DB-based match by zones.name
+  try {
+    const { data: zones, error } = await supabase
+      .from('zones')
+      .select('id, code, name, delivery_fee');
+
+    if (error) {
+      console.error('[Supabase] error reading zones for detectZoneInfo', error);
+    } else if (zones && Array.isArray(zones)) {
+      let bestMatch:
+        | (ZoneDetectResult & { matchLength: number })
+        | null = null;
+
+      for (const z of zones as any[]) {
+        const name = z.name;
+        if (!name) continue;
+        const nameLower = String(name).toLowerCase().trim();
+        if (!nameLower) continue;
+
+        if (lowerAddr.includes(nameLower)) {
+          const dlv =
+            typeof z.delivery_fee === 'number' &&
+            !Number.isNaN(z.delivery_fee)
+              ? z.delivery_fee
+              : null;
+
+          if (!bestMatch || nameLower.length > bestMatch.matchLength) {
+            bestMatch = {
+              zoneId: z.id ?? null,
+              zoneCode: z.code ?? null,
+              deliveryFeeDb: dlv,
+              matchLength: nameLower.length,
+            };
+          }
+        }
+      }
+
+      if (bestMatch) {
+        return {
+          zoneId: bestMatch.zoneId,
+          zoneCode: bestMatch.zoneCode,
+          deliveryFeeDb: bestMatch.deliveryFeeDb,
+        };
+      }
+    }
+  } catch (e) {
+    console.error('[detectZoneInfo] error reading zones', e);
+  }
+
+  // Step 2: fallback ke ZONE_RULES (alias / singkatan)
   for (const rule of ZONE_RULES) {
-    if (rule.keywords.some((kw) => lower.includes(kw))) {
-      return rule;
+    if (rule.keywords.some((kw) => lowerAddr.includes(kw))) {
+      try {
+        const { data: zr, error: zoneErr } = await supabase
+          .from('zones')
+          .select('id, code, delivery_fee')
+          .eq('code', rule.code)
+          .maybeSingle();
+
+        if (zoneErr) {
+          console.error('[Supabase] error reading zones by code', zoneErr);
+        }
+
+        if (zr?.id) {
+          const dlv =
+            typeof zr.delivery_fee === 'number' &&
+            !Number.isNaN(zr.delivery_fee)
+              ? zr.delivery_fee
+              : null;
+          return {
+            zoneId: zr.id,
+            zoneCode: zr.code ?? rule.code,
+            deliveryFeeDb: dlv,
+          };
+        } else {
+          // DB belum ada row, tapi kita tahu kodenya dari rule
+          return {
+            zoneId: null,
+            zoneCode: rule.code,
+            deliveryFeeDb: null,
+          };
+        }
+      } catch (e) {
+        console.error('[detectZoneInfo] error zones by rule', e);
+      }
     }
   }
-  return null;
+
+  return { zoneId: null, zoneCode: null, deliveryFeeDb: null };
 }
 
 /* ===== Helper: resolve items ke product_aliases + products ===== */
@@ -466,40 +563,11 @@ async function createOrderFromResolvedManual(
     }
   }
 
-  // 2) Deteksi zona & ongkir dari DB
-  const zoneRule = detectZoneFromAddress(parsed.address);
-  let zoneId: number | null = null;
-  let zoneCode: string | null = null;
-  let deliveryFeeDb: number | null = null; // null = free (no fee set), 0 = free but explicit
-
-  if (zoneRule) {
-    const { data: zoneRow, error: zoneErr } = await supabase
-      .from('zones')
-      .select('id, code, delivery_fee')
-      .eq('code', zoneRule.code)
-      .maybeSingle();
-
-    if (zoneErr) {
-      console.error('[Supabase] error reading zones', zoneErr);
-    }
-
-    if (zoneRow?.id) {
-      zoneId = zoneRow.id;
-      zoneCode = zoneRow.code ?? zoneRule.code;
-
-      if (
-        typeof zoneRow.delivery_fee === 'number' &&
-        !Number.isNaN(zoneRow.delivery_fee)
-      ) {
-        deliveryFeeDb = zoneRow.delivery_fee; // 0 atau >0
-      } else {
-        deliveryFeeDb = null; // free, tidak disebut di konfirmasi
-      }
-    } else {
-      // DB belum ada row, tapi alamat sudah jelas → tetap pakai kode dari rule untuk display
-      zoneCode = zoneRule.code;
-    }
-  }
+  // 2) Deteksi zona & ongkir dari DB (nama perumahan + alias)
+  const zoneInfo = await detectZoneInfo(parsed.address);
+  const zoneId = zoneInfo.zoneId;
+  const zoneCode = zoneInfo.zoneCode;
+  const deliveryFeeDb = zoneInfo.deliveryFeeDb; // null = free (no fee set)
 
   // 3) Hitung total
   const subtotal = resolvedItems.reduce((sum, item) => sum + item.lineTotal, 0);
