@@ -296,8 +296,11 @@ type ZoneDetectResult = {
 
 /**
  * Deteksi zona:
- * 1) Cek nama perumahan dari DB (zones.name) → kalau alamat mengandung, pakai itu.
- * 2) Kalau tidak ketemu, fallback ke ZONE_RULES (alias / singkatan).
+ * 1) Cek semua row di tabel zones:
+ *    - match full name (zones.name) di alamat
+ *    - match code yang diubah jadi kata (PURI_GALAXY -> "puri galaxy")
+ *    - kalau belum kena, cek token nama (margorejo, galax, dll) di alamat
+ * 2) Kalau tetap nggak ketemu → fallback ke ZONE_RULES (alias / singkatan).
  */
 async function detectZoneInfo(
   address: string | undefined,
@@ -308,7 +311,7 @@ async function detectZoneInfo(
 
   const lowerAddr = address.toLowerCase();
 
-  // Step 1: DB-based match by zones.name
+  // Step 1: scan semua zones di DB
   try {
     const { data: zones, error } = await supabase
       .from('zones')
@@ -318,29 +321,64 @@ async function detectZoneInfo(
       console.error('[Supabase] error reading zones for detectZoneInfo', error);
     } else if (zones && Array.isArray(zones)) {
       let bestMatch:
-        | (ZoneDetectResult & { matchLength: number })
+        | (ZoneDetectResult & { score: number })
         | null = null;
 
       for (const z of zones as any[]) {
-        const name = z.name;
-        if (!name) continue;
-        const nameLower = String(name).toLowerCase().trim();
-        if (!nameLower) continue;
+        const id: number | null = z.id ?? null;
+        const code: string | null = z.code ?? null;
+        const name: string | null = z.name ?? null;
 
-        if (lowerAddr.includes(nameLower)) {
-          const dlv =
-            typeof z.delivery_fee === 'number' &&
-            !Number.isNaN(z.delivery_fee)
-              ? z.delivery_fee
-              : null;
+        const nameLower = name ? String(name).toLowerCase().trim() : '';
+        const codeLower = code ? String(code).toLowerCase().trim() : '';
+        const codeWords = codeLower.replace(/_/g, ' ');
 
-          if (!bestMatch || nameLower.length > bestMatch.matchLength) {
-            bestMatch = {
-              zoneId: z.id ?? null,
-              zoneCode: z.code ?? null,
-              deliveryFeeDb: dlv,
-              matchLength: nameLower.length,
-            };
+        const deliveryFeeValue =
+          typeof z.delivery_fee === 'number' && !Number.isNaN(z.delivery_fee)
+            ? z.delivery_fee
+            : null;
+
+        // kandidat full-string untuk match langsung
+        const fullCandidates = new Set<string>();
+        if (nameLower) fullCandidates.add(nameLower);
+        if (codeWords && codeWords !== nameLower) fullCandidates.add(codeWords);
+
+        // 1A: full-string match (paling kuat, skor +100)
+        for (const cand of fullCandidates) {
+          if (!cand) continue;
+          if (lowerAddr.includes(cand)) {
+            const score = cand.length + 100; // full match lebih kuat
+            if (!bestMatch || score > bestMatch.score) {
+              bestMatch = {
+                zoneId: id,
+                zoneCode: code,
+                deliveryFeeDb: deliveryFeeValue,
+                score,
+              };
+            }
+          }
+        }
+
+        // 1B: token match (contoh: "margorejo cluster diamond" → match token "margorejo" dari "Margorejo Indah")
+        const tokenSource = nameLower || codeWords;
+        if (tokenSource) {
+          const tokens = tokenSource
+            .split(/\s+/)
+            .map((t: string) => t.trim())
+            .filter((t: string) => t.length >= 4); // hindari "di", "rt"
+
+          for (const tok of tokens) {
+            if (lowerAddr.includes(tok)) {
+              const score = tok.length; // lebih rendah dari full match
+              if (!bestMatch || score > bestMatch.score) {
+                bestMatch = {
+                  zoneId: id,
+                  zoneCode: code,
+                  deliveryFeeDb: deliveryFeeValue,
+                  score,
+                };
+              }
+            }
           }
         }
       }
@@ -892,29 +930,31 @@ export async function POST(req: NextRequest) {
 
       const hasDraft = !!lastManualOrders[from];
 
-      // words-based detection supaya "cod", "ok cod", "tf", "ok transfer", "trnsfr", dll tetap kebaca
-      const words = normalized
-        .split(' ')
-        .map((w) => w.trim())
-        .filter((w) => w.length > 0);
+      // compact string untuk baca typo: "ok coddd", "tff", "transf", dll
+      const compact = normalized.replace(/[^a-z0-9]/g, ''); // hapus spasi & simbol
 
-      const isCodWord = (w: string) =>
-        w === 'cod' || w === 'c0d' || w === 'k0d' || w === 'kod';
+      const looksTransfer =
+        compact.includes('tf') ||
+        compact.includes('tff') ||
+        compact.includes('trf') ||
+        compact.includes('tfr') ||
+        compact.includes('transfer') ||
+        compact.includes('transf') ||
+        compact.includes('trnsfr') ||
+        compact.includes('trnsfer') ||
+        compact.includes('trans');
 
-      const isTransferWord = (w: string) =>
-        w === 'tf' ||
-        w === 'trf' ||
-        w === 'tfr' ||
-        w === 'transfer' ||
-        w === 'transf' ||
-        w === 'trnsfr' ||
-        w === 'trnsfer';
+      const looksCod =
+        compact.includes('cod') ||
+        compact.includes('c0d') ||
+        compact.includes('k0d') ||
+        compact.includes('kod') ||
+        compact.includes('codd') ||
+        compact.includes('coddd');
 
-      const hasCodWord = words.some(isCodWord);
-      const hasTransferWord = words.some(isTransferWord);
-      const hasOkWord = words.includes('ok');
+      const looksOk = compact.includes('ok');
 
-      const hasConfirmKeyword = hasCodWord || hasTransferWord || hasOkWord;
+      const hasConfirmKeyword = looksTransfer || looksCod || looksOk;
 
       if (hasDraft && hasConfirmKeyword) {
         const state = lastManualOrders[from];
@@ -930,12 +970,11 @@ export async function POST(req: NextRequest) {
           );
         }
 
-        // Default COD, kalau ada keyword transfer → TRANSFER
+        // Default COD, kalau ada "transfer / tf / tff / transf / trnsfr" → TRANSFER
         let paymentMethod: PaymentMethod;
-        if (hasTransferWord) {
+        if (looksTransfer) {
           paymentMethod = 'TRANSFER';
         } else {
-          // cuma "ok" atau "cod" → COD
           paymentMethod = 'COD';
         }
 
