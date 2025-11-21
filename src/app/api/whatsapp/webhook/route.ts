@@ -687,7 +687,14 @@ async function resolveManualOrder(
     };
     aliasEntries.push(entry);
     aliasMapExact.set(aliasLower, entry);
+    
   });
+
+  //debug log
+  console.log('[ALIAS_DEBUG]', {
+  totalAliases: aliasEntries.length,
+  hasSingkong: aliasMapExact.has('singkong'),
+});
 
   const resolvedItems: ResolvedItem[] = [];
 
