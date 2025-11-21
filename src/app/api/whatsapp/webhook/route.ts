@@ -286,28 +286,39 @@ const ZONE_RULES: ZoneRule[] = [
     code: 'VILLA_BUKIT_REGENCY',
     keywords: ['villa bukit regency', 'vbr'],
   },
-  // tambahan dari Codex patch
+  // Tambahan untuk kawasan timur/lain
   {
     code: 'PURI_GALAXY',
-    keywords: ['puri galaxy', 'pury galaxy', 'puri galaksi', 'pury galaksi'],
-  },
-  {
-    code: 'GALAXY_BUMI_PERMAI',
-    keywords: ['galaxy bumi permai', 'galaxi bumi permai', 'gbp'],
+    keywords: ['puri galaxy', 'puri galaxyy', 'puri galaksi'],
   },
   {
     code: 'KERTAJAYA_INDAH_REGENCY',
     keywords: [
-      'kertajaya indah',
       'kertajaya indah regency',
-      'kertajaya v1',
-      'kertajaya v2',
-      'kertajaya v3',
+      'kertajaya indah',
+      'kertajaya v',
+      'kertajaya',
     ],
   },
   {
+    code: 'GALAXY_BUMI_PERMAI',
+    keywords: ['galaxy bumi permai', 'gbp'],
+  },
+  {
+    code: 'MANYAR_RESIDENCE',
+    keywords: ['manyar residence', 'manyar res'],
+  },
+  {
+    code: 'MULYOSARI_AREA',
+    keywords: ['mulyosari', 'mulyosari area'],
+  },
+  {
     code: 'PAKUWON_CITY',
-    keywords: ['pakuwon city', 'pc'],
+    keywords: ['pakuwon city', 'pwc'],
+  },
+  {
+    code: 'DHARMAHUSADA_INDAH',
+    keywords: ['dharmahusada indah', 'dhi'],
   },
 ];
 
@@ -315,15 +326,6 @@ type ZoneDetectResult = {
   zoneId: number | null;
   zoneCode: string | null;
   deliveryFeeDb: number | null; // null = free (no fee set)
-};
-
-// Row yang diambil dari Supabase.zones (dengan type aman)
-type ZoneRow = {
-  id: number | null;
-  code: string | null;
-  name: string | null;
-  area_group: string | null;
-  delivery_fee: number | null;
 };
 
 // Levenshtein distance sederhana untuk fuzzy match
@@ -354,83 +356,6 @@ function levenshtein(a: string, b: string): number {
   return dp[m][n];
 }
 
-// 1 = sama persis, 0 = beda jauh
-function normalizedSimilarity(a: string, b: string): number {
-  const dist = levenshtein(a, b);
-  const maxLen = Math.max(1, Math.max(a.length, b.length));
-  return 1 - dist / maxLen;
-}
-
-// Normalisasi alamat: lowercase, buang tanda baca, buang kata "jl", "blok" dll
-function normalizeAddressText(value: string): string {
-  let normalized = value.toLowerCase();
-
-  const replacements: Array<[RegExp, string]> = [
-    [/\bpury\b/g, 'puri'],
-    [/\bpuri\s+glx\b/g, 'puri galaxy'],
-    [/\bgalaxi\b/g, 'galaxy'],
-    [/\bgallaxy\b/g, 'galaxy'],
-    [/\bgxy\b/g, 'galaxy'],
-    [/\bgrah?ha\b/g, 'graha'],
-    [/\broyal res\b/g, 'royal residence'],
-    [/\bwbm\b/g, 'wisata bukit mas'],
-    [/\bvbm\b/g, 'villa bukit mas'],
-    [/\bvbr\b/g, 'villa bukit regency'],
-    [/\bpc\b/g, 'pakuwon city'],
-    [/\bkertajaya\s*v[123]\b/g, 'kertajaya indah'],
-  ];
-
-  normalized = normalized.normalize('NFKD');
-
-  for (const [regex, repl] of replacements) {
-    normalized = normalized.replace(regex, repl);
-  }
-
-  normalized = normalized
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\b(jl|jalan|gang|gg|rt|rw|blok|no|nomor|kel|kec)\b/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  return normalized;
-}
-
-function buildNgrams(tokens: string[], min = 1, max = 3): string[] {
-  const grams: string[] = [];
-  for (let size = min; size <= max; size++) {
-    for (let i = 0; i + size <= tokens.length; i++) {
-      grams.push(tokens.slice(i, i + size).join(' '));
-    }
-  }
-  return grams;
-}
-
-// Kumpulkan semua "kata kunci" untuk satu zona: name, area_group, code, plus alias dari ZONE_RULES
-function collectZoneKeywords(zone: ZoneRow): string[] {
-  const keywords = new Set<string>();
-
-  const nameLower = zone.name ? zone.name.toLowerCase().trim() : '';
-  const agLower = zone.area_group ? zone.area_group.toLowerCase().trim() : '';
-  const codeWords = zone.code
-    ? zone.code.toLowerCase().replace(/_/g, ' ')
-    : '';
-
-  [nameLower, agLower, codeWords].forEach((val) => {
-    if (val) {
-      keywords.add(normalizeAddressText(val));
-    }
-  });
-
-  if (zone.code) {
-    const extra = ZONE_RULES.find((r) => r.code === zone.code);
-    extra?.keywords.forEach((kw) =>
-      keywords.add(normalizeAddressText(kw)),
-    );
-  }
-
-  return Array.from(keywords).filter(Boolean);
-}
-
 const GENERIC_TOKENS = new Set([
   'area',
   'residence',
@@ -450,9 +375,12 @@ async function detectZoneInfo(
     return { zoneId: null, zoneCode: null, deliveryFeeDb: null };
   }
 
-  const normalizedAddr = normalizeAddressText(address);
-  const addrTokens = normalizedAddr.split(/\s+/).filter((t) => t.length > 0);
-  const addrNgrams = buildNgrams(addrTokens, 1, 3);
+  const lowerAddr = address.toLowerCase();
+  // token alamat per kata (buang tanda baca dll)
+  const addrTokens = lowerAddr
+    .split(/[^a-z0-9]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2);
 
   let bestMatch:
     | (ZoneDetectResult & { score: number; debugFrom: string })
@@ -466,71 +394,113 @@ async function detectZoneInfo(
     if (error) {
       console.error('[Supabase] error reading zones for detectZoneInfo', error);
     } else if (zones && Array.isArray(zones)) {
-      const zoneRows: ZoneRow[] = (zones as any[]).map((raw) => ({
-        id: typeof raw.id === 'number' ? raw.id : null,
-        code: typeof raw.code === 'string' ? raw.code : null,
-        name: typeof raw.name === 'string' ? raw.name : null,
-        area_group:
-          typeof raw.area_group === 'string' ? raw.area_group : null,
-        delivery_fee:
-          typeof raw.delivery_fee === 'number' &&
-          !Number.isNaN(raw.delivery_fee)
-            ? (raw.delivery_fee as number)
-            : null,
-      }));
+      for (const z of zones as any[]) {
+        const id: number | null = z.id ?? null;
+        const code: string | null = z.code ?? null;
 
-      for (const z of zoneRows) {
-        const id = z.id;
-        const code = z.code;
-        const deliveryFeeValue = z.delivery_fee;
+        const nameLower = z.name
+          ? String(z.name).toLowerCase().trim()
+          : '';
+        const agLower = z.area_group
+          ? String(z.area_group).toLowerCase().trim()
+          : '';
+        const codeLower = code ? String(code).toLowerCase().trim() : '';
+        const codeWords = codeLower.replace(/_/g, ' ');
 
-        if (!code) continue;
+        const deliveryFeeValue =
+          typeof z.delivery_fee === 'number' && !Number.isNaN(z.delivery_fee)
+            ? z.delivery_fee
+            : null;
 
-        const candidates = collectZoneKeywords(z);
-        if (candidates.length === 0) continue;
+        /* === 1) FULL STRING MATCH (nama lengkap / area_group / codeWords) === */
 
-        for (const cand of candidates) {
+        const fullCandidates = new Set<string>();
+        if (nameLower) fullCandidates.add(nameLower);
+        if (agLower) fullCandidates.add(agLower);
+        if (codeWords) fullCandidates.add(codeWords);
+
+        for (const cand of fullCandidates) {
           if (!cand) continue;
-
-          // exact substring: "puri galaxy" ada di alamat
-          if (normalizedAddr.includes(cand)) {
-            const score = 1.0; // paling kuat
+          if (lowerAddr.includes(cand)) {
+            const score = cand.length + 300; // super kuat
             if (!bestMatch || score > bestMatch.score) {
               bestMatch = {
                 zoneId: id,
                 zoneCode: code,
                 deliveryFeeDb: deliveryFeeValue,
                 score,
-                debugFrom: `substring:${cand}`,
+                debugFrom: `full:${cand}`,
+              };
+            }
+          }
+        }
+
+        /* === 2) TOKEN MATCH (per kata, exact + fuzzy) === */
+
+        const tokenSource = [nameLower, agLower, codeWords]
+          .filter(Boolean)
+          .join(' ');
+
+        if (!tokenSource) continue;
+
+        const tokens = tokenSource
+          .split(/\s+/)
+          .map((t: string) => t.trim())
+          .filter(
+            (t: string) =>
+              t.length >= 4 && !GENERIC_TOKENS.has(t), // buang kata generik "area", "city", dll
+          );
+
+        for (const tok of tokens) {
+          if (!tok) continue;
+
+          // exact substring hit ("kertajaya" ada di alamat)
+          if (lowerAddr.includes(tok)) {
+            const score = tok.length + 100; // lebih tinggi dari fuzzy
+            if (!bestMatch || score > bestMatch.score) {
+              bestMatch = {
+                zoneId: id,
+                zoneCode: code,
+                deliveryFeeDb: deliveryFeeValue,
+                score,
+                debugFrom: `token-exact:${tok}`,
               };
             }
             continue;
           }
 
-          // fuzzy lewat n-gram
-          let bestSim = 0;
-          let bestNgram = '';
+          /* === FUZZY MATCH PER KATA (Levenshtein) === */
 
-          for (const ngram of addrNgrams) {
-            const sim = normalizedSimilarity(cand, ngram);
-            if (sim > bestSim) {
-              bestSim = sim;
-              bestNgram = ngram;
+          let bestTokDist = Infinity;
+          let bestAddrTok = '';
+
+          for (const addrTok of addrTokens) {
+            const maxLen = Math.max(tok.length, addrTok.length);
+            if (maxLen < 4) continue; // kata terlalu pendek
+
+            const dist = levenshtein(tok, addrTok);
+            if (dist < bestTokDist) {
+              bestTokDist = dist;
+              bestAddrTok = addrTok;
             }
           }
 
-          if (bestSim > 0) {
-            const finalScore = bestSim; // 0..1
-            if (!bestMatch || finalScore > bestMatch.score) {
-              bestMatch = {
-                zoneId: id,
-                zoneCode: code,
-                deliveryFeeDb: deliveryFeeValue,
-                score: finalScore,
-                debugFrom: `ngram:${cand}<->${bestNgram} (sim=${bestSim.toFixed(
-                  2,
-                )})`,
-              };
+          if (bestTokDist !== Infinity) {
+            const maxLen = Math.max(tok.length, bestAddrTok.length);
+            // threshold: <=1 untuk kata pendek, <=2 untuk kata lebih panjang
+            const allowed = maxLen <= 5 ? 1 : 2;
+
+            if (bestTokDist <= allowed) {
+              const score = tok.length - bestTokDist; // sedikit lebih rendah dari exact
+              if (!bestMatch || score > bestMatch.score) {
+                bestMatch = {
+                  zoneId: id,
+                  zoneCode: code,
+                  deliveryFeeDb: deliveryFeeValue,
+                  score,
+                  debugFrom: `token-fuzzy:${tok}->${bestAddrTok} (d=${bestTokDist})`,
+                };
+              }
             }
           }
         }
@@ -542,7 +512,7 @@ async function detectZoneInfo(
 
   // Log supaya kelihatan di Vercel
   console.log('[ZONE_DEBUG]', {
-    address: normalizedAddr,
+    address: lowerAddr,
     tokens: addrTokens,
     match: bestMatch
       ? {
@@ -554,11 +524,8 @@ async function detectZoneInfo(
       : null,
   });
 
-  // threshold agar nggak ngawur (0.7 cukup ketat)
-  const MIN_SCORE = 0.7;
-
-  // Kalau ada match dari DB dengan skor cukup, pakai itu
-  if (bestMatch && bestMatch.score >= MIN_SCORE) {
+  // Kalau ada match dari DB, pakai itu
+  if (bestMatch) {
     return {
       zoneId: bestMatch.zoneId,
       zoneCode: bestMatch.zoneCode,
@@ -566,9 +533,9 @@ async function detectZoneInfo(
     };
   }
 
-  /* === Fallback ke ZONE_RULES (alias hardcode: graha famili, wbm, dll) === */
+  /* === 4) Fallback ke ZONE_RULES (alias hardcode: graha famili, puri galaxy, kertajaya, dll) === */
 
-  const lower = normalizedAddr;
+  const lower = lowerAddr;
   for (const rule of ZONE_RULES) {
     if (rule.keywords.some((kw) => lower.includes(kw))) {
       try {
@@ -589,7 +556,7 @@ async function detectZoneInfo(
               ? zr.delivery_fee
               : null;
           console.log('[ZONE_DEBUG_FALLBACK_RULE]', {
-            address: normalizedAddr,
+            address: lowerAddr,
             rule: rule.code,
             zoneId: zr.id,
           });
@@ -600,7 +567,7 @@ async function detectZoneInfo(
           };
         } else {
           console.log('[ZONE_DEBUG_FALLBACK_RULE_NO_DB]', {
-            address: normalizedAddr,
+            address: lowerAddr,
             rule: rule.code,
           });
           return {
@@ -615,7 +582,7 @@ async function detectZoneInfo(
     }
   }
 
-  console.log('[ZONE_DEBUG_NO_MATCH]', { address: normalizedAddr });
+  console.log('[ZONE_DEBUG_NO_MATCH]', { address: lowerAddr });
   return { zoneId: null, zoneCode: null, deliveryFeeDb: null };
 }
 
@@ -675,7 +642,7 @@ async function resolveManualOrder(
 
   (aliasRows ?? []).forEach((row: any) => {
     if (!row || !row.alias || !row.products) return;
-    const aliasLower = String(row.alias).toLowerCase();
+    const aliasLower = String(row.alias).toLowerCase().trim(); // <-- trim di sini
     const entry: AliasEntry = {
       aliasLower,
       productId: row.products.id,
@@ -689,7 +656,7 @@ async function resolveManualOrder(
   const resolvedItems: ResolvedItem[] = [];
 
   for (const item of parsedItems) {
-    const key = item.aliasText.toLowerCase();
+    const key = item.aliasText.toLowerCase().trim();
 
     let chosen: AliasEntry | null = aliasMapExact.get(key) ?? null;
 
