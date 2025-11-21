@@ -670,12 +670,15 @@ async function resolveManualOrder(
     price: number;
   };
 
+    const normalizeAlias = (val: string): string =>
+    val.toLowerCase().replace(/\s+/g, ' ').trim();
+
   const aliasEntries: AliasEntry[] = [];
   const aliasMapExact = new Map<string, AliasEntry>();
 
   (aliasRows ?? []).forEach((row: any) => {
     if (!row || !row.alias || !row.products) return;
-    const aliasLower = String(row.alias).toLowerCase();
+    const aliasLower = normalizeAlias(String(row.alias));
     const entry: AliasEntry = {
       aliasLower,
       productId: row.products.id,
@@ -689,7 +692,7 @@ async function resolveManualOrder(
   const resolvedItems: ResolvedItem[] = [];
 
   for (const item of parsedItems) {
-    const key = item.aliasText.toLowerCase();
+    const key = normalizeAlias(item.aliasText);
 
     let chosen: AliasEntry | null = aliasMapExact.get(key) ?? null;
 
