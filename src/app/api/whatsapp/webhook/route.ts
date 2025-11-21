@@ -694,12 +694,6 @@ async function resolveManualOrder(
     
   });
 
-  //debug log
-  console.log('[ALIAS_DEBUG]', {
-  totalAliases: aliasEntries.length,
-  hasSingkong: aliasMapExact.has('singkong'),
-});
-
   const resolvedItems: ResolvedItem[] = [];
 
   for (const item of parsedItems) {
@@ -722,7 +716,7 @@ async function resolveManualOrder(
           bestDist = 0;
           break;
         }
-        
+
         const dist = levenshtein(key, entry.aliasLower);
         const maxLen = Math.max(key.length, entry.aliasLower.length);
         if (maxLen < 4) continue; // terlalu pendek
