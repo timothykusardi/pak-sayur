@@ -696,6 +696,12 @@ async function resolveManualOrder(
 
   const resolvedItems: ResolvedItem[] = [];
 
+  const tokenize = (val: string): string[] =>
+    val
+      .split(/\s+/)
+      .map((t) => t.trim())
+      .filter(Boolean);
+
   for (const item of parsedItems) {
     const key = normalizeAlias(item.aliasText);
 
@@ -703,30 +709,34 @@ async function resolveManualOrder(
 
     // Kalau exact tidak ketemu → coba fuzzy
     if (!chosen) {
-      let bestDist = Infinity;
+      let bestScore = 0;
       let bestEntry: AliasEntry | null = null;
 
+      const keyTokens = tokenize(key);
+
       for (const entry of aliasEntries) {
+        const aliasTokens = tokenize(entry.aliasLower);
+        const baseSim = normalizedSimilarity(key, entry.aliasLower);
+
+        // Skip yang terlalu beda supaya tidak keambil produk lain
+        if (baseSim < 0.55) continue;
+
+        let score = baseSim;
+
         if (
           (entry.aliasLower.length >= 4 &&
             entry.aliasLower.includes(key)) ||
           (key.length >= 4 && key.includes(entry.aliasLower))
         ) {
-          bestEntry = entry;
-          bestDist = 0;
-          break;
+          score += 0.2;
         }
 
-        const dist = levenshtein(key, entry.aliasLower);
-        const maxLen = Math.max(key.length, entry.aliasLower.length);
-        if (maxLen < 4) continue; // terlalu pendek
+        const tokenDiff = Math.abs(keyTokens.length - aliasTokens.length);
+        score -= tokenDiff * 0.05;
 
-        // threshold kecil: typo dikit ok, beda produk (besar vs kecil) nggak keambil
-        const allowed = maxLen <= 5 ? 1 : 2;
-
-        if (dist <= allowed && dist < bestDist) {
-          bestDist = dist;
+        if (!bestEntry || score > bestScore) {
           bestEntry = entry;
+          bestScore = score;
         }
       }
 
@@ -736,7 +746,7 @@ async function resolveManualOrder(
           input: key,
           match: bestEntry.aliasLower,
           product: bestEntry.productName,
-          dist: bestDist,
+          score: bestScore.toFixed(3),
         });
       }
     }
@@ -834,6 +844,25 @@ async function createOrderFromResolvedManual(
     }
   }
 
+   // Gabung item yang memiliki product_id sama supaya tidak kena constraint unique
+  const aggregatedItemsMap = new Map<number, ResolvedItem>();
+
+  for (const item of resolvedItems) {
+    const existing = aggregatedItemsMap.get(item.productId);
+    if (existing) {
+      const newQty = existing.qty + item.qty;
+      aggregatedItemsMap.set(item.productId, {
+        ...existing,
+        qty: newQty,
+        lineTotal: newQty * existing.unitPrice,
+      });
+    } else {
+      aggregatedItemsMap.set(item.productId, { ...item });
+    }
+  }
+
+  const aggregatedItems = Array.from(aggregatedItemsMap.values());
+
   // 2) Deteksi zona & ongkir dari DB
   const zoneInfo = await detectZoneInfo(parsed.address);
   const zoneId = zoneInfo.zoneId;
@@ -841,7 +870,7 @@ async function createOrderFromResolvedManual(
   const deliveryFeeDb = zoneInfo.deliveryFeeDb; // null = free (no fee set)
 
   // 3) Hitung total
-  const subtotal = resolvedItems.reduce((sum, item) => sum + item.lineTotal, 0);
+  const subtotal = aggregatedItems.reduce((sum, item) => sum + item.lineTotal, 0);
   const deliveryFeeForOrder = deliveryFeeDb ?? 0; // kolom orders.delivery_fee NOT NULL
   const discountTotal = 0;
   const grandTotal = subtotal + deliveryFeeForOrder - discountTotal;
@@ -871,7 +900,7 @@ async function createOrderFromResolvedManual(
   const orderId = orderRow.id;
 
   // 5) Insert banyak order_items sekaligus
-  const itemsPayload = resolvedItems.map((item) => ({
+  const itemsPayload = aggregatedItems.map((item) => ({
     order_id: orderId,
     product_id: item.productId,
     qty: item.qty,
@@ -903,7 +932,7 @@ async function createOrderFromResolvedManual(
     orderId,
     subtotal,
     grandTotal,
-    items: resolvedItems,
+    items: aggregatedItems,
     deliveryFee: deliveryFeeForOrder, // numeric yang dipakai di orders
     deliveryFeeDb, // nullable: null = free (no fee set)
     paymentMethod,
