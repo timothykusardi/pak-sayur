@@ -294,6 +294,34 @@ type ZoneDetectResult = {
   deliveryFeeDb: number | null; // null = free (no fee set)
 };
 
+// Levenshtein distance sederhana untuk fuzzy match
+function levenshtein(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+
+  const dp: number[][] = Array.from({ length: m + 1 }, () =>
+    new Array(n + 1).fill(0),
+  );
+
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1, // delete
+        dp[i][j - 1] + 1, // insert
+        dp[i - 1][j - 1] + cost, // substitute
+      );
+    }
+  }
+
+  return dp[m][n];
+}
+
 const GENERIC_TOKENS = new Set([
   'area',
   'residence',
@@ -314,6 +342,12 @@ async function detectZoneInfo(
   }
 
   const lowerAddr = address.toLowerCase();
+  // token alamat per kata (buang tanda baca dll)
+  const addrTokens = lowerAddr
+    .split(/[^a-z0-9]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2);
+
   let bestMatch:
     | (ZoneDetectResult & { score: number; debugFrom: string })
     | null = null;
@@ -344,7 +378,8 @@ async function detectZoneInfo(
             ? z.delivery_fee
             : null;
 
-        // === 1) FULL STRING MATCH (paling kuat) ===
+        /* === 1) FULL STRING MATCH (nama lengkap / area_group / codeWords) === */
+
         const fullCandidates = new Set<string>();
         if (nameLower) fullCandidates.add(nameLower);
         if (agLower) fullCandidates.add(agLower);
@@ -353,7 +388,7 @@ async function detectZoneInfo(
         for (const cand of fullCandidates) {
           if (!cand) continue;
           if (lowerAddr.includes(cand)) {
-            const score = cand.length + 200; // full match, skor tinggi
+            const score = cand.length + 300; // super kuat
             if (!bestMatch || score > bestMatch.score) {
               bestMatch = {
                 zoneId: id,
@@ -366,29 +401,70 @@ async function detectZoneInfo(
           }
         }
 
-        // === 2) TOKEN MATCH (per kata) ===
+        /* === 2) TOKEN MATCH (per kata, exact + fuzzy) === */
+
         const tokenSource = [nameLower, agLower, codeWords]
           .filter(Boolean)
           .join(' ');
-        if (tokenSource) {
-          const tokens = tokenSource
-            .split(/\s+/)
-            .map((t: string) => t.trim())
-            .filter(
-              (t: string) =>
-                t.length >= 4 && !GENERIC_TOKENS.has(t), // buang kata generik "area", "city", dll
-            );
 
-          for (const tok of tokens) {
-            if (lowerAddr.includes(tok)) {
-              const score = tok.length; // lebih lemah daripada full match
+        if (!tokenSource) continue;
+
+        const tokens = tokenSource
+          .split(/\s+/)
+          .map((t: string) => t.trim())
+          .filter(
+            (t: string) =>
+              t.length >= 4 && !GENERIC_TOKENS.has(t), // buang kata generik "area", "city", dll
+          );
+
+        for (const tok of tokens) {
+          if (!tok) continue;
+
+          // exact substring hit ("kertajaya" ada di alamat)
+          if (lowerAddr.includes(tok)) {
+            const score = tok.length + 100; // lebih tinggi dari fuzzy
+            if (!bestMatch || score > bestMatch.score) {
+              bestMatch = {
+                zoneId: id,
+                zoneCode: code,
+                deliveryFeeDb: deliveryFeeValue,
+                score,
+                debugFrom: `token-exact:${tok}`,
+              };
+            }
+            continue;
+          }
+
+          /* === FUZZY MATCH PER KATA (Levenshtein) === */
+
+          let bestTokDist = Infinity;
+          let bestAddrTok = '';
+
+          for (const addrTok of addrTokens) {
+            const maxLen = Math.max(tok.length, addrTok.length);
+            if (maxLen < 4) continue; // kata terlalu pendek
+
+            const dist = levenshtein(tok, addrTok);
+            if (dist < bestTokDist) {
+              bestTokDist = dist;
+              bestAddrTok = addrTok;
+            }
+          }
+
+          if (bestTokDist !== Infinity) {
+            const maxLen = Math.max(tok.length, bestAddrTok.length);
+            // threshold: <=1 untuk kata pendek, <=2 untuk kata lebih panjang
+            const allowed = maxLen <= 5 ? 1 : 2;
+
+            if (bestTokDist <= allowed) {
+              const score = tok.length - bestTokDist; // sedikit lebih rendah dari exact
               if (!bestMatch || score > bestMatch.score) {
                 bestMatch = {
                   zoneId: id,
                   zoneCode: code,
                   deliveryFeeDb: deliveryFeeValue,
                   score,
-                  debugFrom: `token:${tok}`,
+                  debugFrom: `token-fuzzy:${tok}->${bestAddrTok} (d=${bestTokDist})`,
                 };
               }
             }
@@ -400,9 +476,10 @@ async function detectZoneInfo(
     console.error('[detectZoneInfo] error reading zones', e);
   }
 
-  // Log supaya kamu bisa lihat di Vercel
+  // Log supaya kelihatan di Vercel
   console.log('[ZONE_DEBUG]', {
     address: lowerAddr,
+    tokens: addrTokens,
     match: bestMatch
       ? {
           zoneId: bestMatch.zoneId,
@@ -413,6 +490,7 @@ async function detectZoneInfo(
       : null,
   });
 
+  // Kalau ada match dari DB, pakai itu
   if (bestMatch) {
     return {
       zoneId: bestMatch.zoneId,
@@ -421,7 +499,8 @@ async function detectZoneInfo(
     };
   }
 
-  // fallback: pakai ZONE_RULES (alias manual: graha famili, royal res, dll) seperti sebelumnya
+  /* === 4) Fallback ke ZONE_RULES (alias hardcode: graha famili, wbm, dll) === */
+
   const lower = lowerAddr;
   for (const rule of ZONE_RULES) {
     if (rule.keywords.some((kw) => lower.includes(kw))) {
@@ -473,7 +552,7 @@ async function detectZoneInfo(
   return { zoneId: null, zoneCode: null, deliveryFeeDb: null };
 }
 
-/* ===== Helper: resolve items ke product_aliases + products ===== */
+/* ===== Helper: resolve items ke product_aliases + products (Levenshtein) ===== */
 
 type ResolveResult =
   | {
@@ -509,33 +588,35 @@ async function resolveManualOrder(
     return { ok: false, errors };
   }
 
-  const uniqueAliases = Array.from(
-    new Set(parsedItems.map((i) => i.aliasText.trim().toLowerCase())),
-  );
-
   const { data: aliasRows, error: aliasErr } = await supabase
     .from('product_aliases')
-    .select('alias, product_id, products(id, name, price)')
-    .in('alias', uniqueAliases);
+    .select('alias, product_id, products(id, name, price)');
 
   if (aliasErr) {
     console.error('[Supabase] error reading product_aliases', aliasErr);
   }
 
-  const aliasMap = new Map<
-    string,
-    { product_id: number; product_name: string; price: number }
-  >();
+  type AliasEntry = {
+    aliasLower: string;
+    productId: number;
+    productName: string;
+    price: number;
+  };
+
+  const aliasEntries: AliasEntry[] = [];
+  const aliasMapExact = new Map<string, AliasEntry>();
 
   (aliasRows ?? []).forEach((row: any) => {
-    const key = String(row.alias).toLowerCase();
-    const prod = row.products;
-    if (!prod) return;
-    aliasMap.set(key, {
-      product_id: prod.id,
-      product_name: prod.name,
-      price: prod.price,
-    });
+    if (!row || !row.alias || !row.products) return;
+    const aliasLower = String(row.alias).toLowerCase();
+    const entry: AliasEntry = {
+      aliasLower,
+      productId: row.products.id,
+      productName: row.products.name,
+      price: row.products.price,
+    };
+    aliasEntries.push(entry);
+    aliasMapExact.set(aliasLower, entry);
   });
 
   const resolvedItems: ResolvedItem[] = [];
@@ -543,22 +624,53 @@ async function resolveManualOrder(
   for (const item of parsedItems) {
     const key = item.aliasText.toLowerCase();
 
-    const aliasInfo = aliasMap.get(key);
-    if (!aliasInfo) {
+    let chosen: AliasEntry | null = aliasMapExact.get(key) ?? null;
+
+    // Kalau exact tidak ketemu → coba fuzzy
+    if (!chosen) {
+      let bestDist = Infinity;
+      let bestEntry: AliasEntry | null = null;
+
+      for (const entry of aliasEntries) {
+        const dist = levenshtein(key, entry.aliasLower);
+        const maxLen = Math.max(key.length, entry.aliasLower.length);
+        if (maxLen < 4) continue; // terlalu pendek
+
+        // threshold kecil: typo dikit ok, beda produk (besar vs kecil) nggak keambil
+        const allowed = maxLen <= 5 ? 1 : 2;
+
+        if (dist <= allowed && dist < bestDist) {
+          bestDist = dist;
+          bestEntry = entry;
+        }
+      }
+
+      if (bestEntry) {
+        chosen = bestEntry;
+        console.log('[ALIAS_FUZZY_MATCH]', {
+          input: key,
+          match: bestEntry.aliasLower,
+          product: bestEntry.productName,
+          dist: bestDist,
+        });
+      }
+    }
+
+    if (!chosen) {
       errors.push(
         `Item "${item.raw}" tidak ditemukan di daftar product_aliases (alias: "${item.aliasText}").`,
       );
       continue;
     }
 
-    const lineTotal = item.qty * aliasInfo.price;
+    const lineTotal = item.qty * chosen.price;
 
     resolvedItems.push({
       raw: item.raw,
       aliasText: item.aliasText,
-      productId: aliasInfo.product_id,
-      productName: aliasInfo.product_name,
-      unitPrice: aliasInfo.price,
+      productId: chosen.productId,
+      productName: chosen.productName,
+      unitPrice: chosen.price,
       qty: item.qty,
       lineTotal,
     });
@@ -637,7 +749,7 @@ async function createOrderFromResolvedManual(
     }
   }
 
-  // 2) Deteksi zona & ongkir dari DB (nama perumahan + alias)
+  // 2) Deteksi zona & ongkir dari DB
   const zoneInfo = await detectZoneInfo(parsed.address);
   const zoneId = zoneInfo.zoneId;
   const zoneCode = zoneInfo.zoneCode;
@@ -654,7 +766,7 @@ async function createOrderFromResolvedManual(
     .from('orders')
     .insert({
       customer_id: customerId,
-      status: 'PENDING', // setelah konfirmasi, kita anggap PENDING/CONFIRMED
+      status: 'PENDING',
       source_channel: 'whatsapp',
       address_text: parsed.address ?? '(alamat belum lengkap)',
       zone_id: zoneId,
@@ -662,7 +774,7 @@ async function createOrderFromResolvedManual(
       delivery_fee: deliveryFeeForOrder,
       discount_total: discountTotal,
       grand_total: grandTotal,
-      payment_method: paymentMethod, // 'COD' | 'TRANSFER'
+      payment_method: paymentMethod,
     })
     .select('id')
     .single();
