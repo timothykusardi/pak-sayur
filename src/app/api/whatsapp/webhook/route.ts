@@ -670,8 +670,12 @@ async function resolveManualOrder(
     price: number;
   };
 
-    const normalizeAlias = (val: string): string =>
-    val.toLowerCase().replace(/\s+/g, ' ').trim();
+     const normalizeAlias = (val: string): string =>
+    val
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
 
   const aliasEntries: AliasEntry[] = [];
   const aliasMapExact = new Map<string, AliasEntry>();
@@ -709,6 +713,16 @@ async function resolveManualOrder(
       let bestEntry: AliasEntry | null = null;
 
       for (const entry of aliasEntries) {
+        if (
+          (entry.aliasLower.length >= 4 &&
+            entry.aliasLower.includes(key)) ||
+          (key.length >= 4 && key.includes(entry.aliasLower))
+        ) {
+          bestEntry = entry;
+          bestDist = 0;
+          break;
+        }
+        
         const dist = levenshtein(key, entry.aliasLower);
         const maxLen = Math.max(key.length, entry.aliasLower.length);
         if (maxLen < 4) continue; // terlalu pendek
