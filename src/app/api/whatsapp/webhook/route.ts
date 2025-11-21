@@ -655,12 +655,20 @@ async function resolveManualOrder(
     return { ok: false, errors };
   }
 
+  // === NEW: ambil alias + produk terpisah, join via SKU di code ===
   const { data: aliasRows, error: aliasErr } = await supabase
     .from('product_aliases')
-    .select('alias, product_id, products(id, name, price)');
+    .select('alias, sku');
+
+  const { data: productRows, error: prodErr } = await supabase
+    .from('products')
+    .select('id, sku, name, price');
 
   if (aliasErr) {
     console.error('[Supabase] error reading product_aliases', aliasErr);
+  }
+  if (prodErr) {
+    console.error('[Supabase] error reading products', prodErr);
   }
 
   type AliasEntry = {
@@ -670,18 +678,59 @@ async function resolveManualOrder(
     price: number;
   };
 
+  type ProductRow = {
+    id: number;
+    sku: string;
+    name: string;
+    price: number;
+  };
+
+  const productBySku = new Map<string, ProductRow>();
+
+  (productRows ?? []).forEach((row: any) => {
+    if (!row) return;
+    const id = typeof row.id === 'number' ? row.id : null;
+    const sku =
+      typeof row.sku === 'string' ? row.sku.trim().toLowerCase() : null;
+    const name =
+      typeof row.name === 'string' ? (row.name as string) : null;
+    const price =
+      typeof row.price === 'number' && !Number.isNaN(row.price)
+        ? (row.price as number)
+        : null;
+
+    if (!id || !sku || !name || price == null) return;
+
+    const prod: ProductRow = { id, sku, name, price };
+    productBySku.set(sku, prod);
+  });
+
   const aliasEntries: AliasEntry[] = [];
   const aliasMapExact = new Map<string, AliasEntry>();
 
   (aliasRows ?? []).forEach((row: any) => {
-    if (!row || !row.alias || !row.products) return;
-    const aliasLower = String(row.alias).toLowerCase();
+    if (!row) return;
+    const alias =
+      typeof row.alias === 'string' ? row.alias.trim() : '';
+    const sku =
+      typeof row.sku === 'string' ? row.sku.trim().toLowerCase() : '';
+
+    if (!alias || !sku) return;
+
+    const product = productBySku.get(sku);
+    if (!product) {
+      console.warn('[ALIAS_PRODUCT_NOT_FOUND]', { alias, sku });
+      return;
+    }
+
+    const aliasLower = alias.toLowerCase();
     const entry: AliasEntry = {
       aliasLower,
-      productId: row.products.id,
-      productName: row.products.name,
-      price: row.products.price,
+      productId: product.id,
+      productName: product.name,
+      price: product.price,
     };
+
     aliasEntries.push(entry);
     aliasMapExact.set(aliasLower, entry);
   });
